@@ -138,18 +138,21 @@ if [[ -n "$RUNNING_SERVICES" ]]; then
         for svc in $RUNNING_SERVICES; do
             systemctl stop "$svc" 2>/dev/null || true
         done
-        # Kill any orphan spamass-milter processes
-        pkill -x spamass-milter 2>/dev/null || true
-        sleep 1
         log_info "Services stopped."
     else
         log_error "Cannot install while services are running. Aborted."
         exit 1
     fi
-else
-    # Kill orphan processes even if systemd doesn't know about them
-    pkill -x spamass-milter 2>/dev/null || true
 fi
+
+# Force-kill any orphan spamass-milter processes and clean up stale files
+if pgrep -x spamass-milter >/dev/null 2>&1; then
+    kill -9 $(pgrep -x spamass-milter) 2>/dev/null || true
+    sleep 1
+    log_info "Killed orphan spamass-milter process."
+fi
+rm -f /var/run/spamass/spamass.pid 2>/dev/null || true
+rm -f /var/spool/postfix/spamass/spamass.sock 2>/dev/null || true
 
 # Fix any broken dpkg state from a previous failed run
 dpkg --configure -a 2>/dev/null || true
