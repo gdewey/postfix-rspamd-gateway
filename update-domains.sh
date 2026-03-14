@@ -42,9 +42,10 @@ done < "${DOMAINS_CONF}"
 
 postmap hash:"${TRANSPORT}"
 postmap hash:"${RELAY_DOMAINS}"
-postfix reload
+postfix reload >/dev/null 2>&1
 
-echo "Done. ${COUNT} domain(s) configured for relay."
 if [[ $COUNT -eq 0 ]]; then
     echo "Warning: no active domains found. All entries in domains.conf are commented out."
+else
+    echo "${COUNT} domain(s) configured. Postfix reloaded."
 fi
