@@ -51,12 +51,33 @@ echo -e "${BOLD}========================================${NC}"
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 1: Interactive questions
+# Step 1: Interactive questions (load defaults from .env if exists)
 # ---------------------------------------------------------------------------
+ENV_FILE="${SCRIPT_DIR}/.env"
+
+DEFAULT_DQS_KEY=""
+DEFAULT_HOSTNAME=""
+DEFAULT_HBL="n"
+
+if [[ -f "$ENV_FILE" ]]; then
+    source "$ENV_FILE"
+    DEFAULT_DQS_KEY="${DQS_KEY:-}"
+    DEFAULT_HOSTNAME="${HOSTNAME_GW:-}"
+    DEFAULT_HBL="${HBL_ENABLED:-n}"
+    log_info "Previous configuration loaded from .env"
+    echo ""
+fi
+
 echo -e "${BOLD}--- Configuration ---${NC}"
+echo -e "  ${CYAN}Press Enter to keep default shown in ()${NC}"
 echo ""
 
-read -rp "  Spamhaus DQS key: " DQS_KEY
+if [[ -n "$DEFAULT_DQS_KEY" ]]; then
+    read -rp "  Spamhaus DQS key (${DEFAULT_DQS_KEY:0:6}...${DEFAULT_DQS_KEY: -4}): " DQS_KEY
+    DQS_KEY="${DQS_KEY:-$DEFAULT_DQS_KEY}"
+else
+    read -rp "  Spamhaus DQS key: " DQS_KEY
+fi
 if [[ -z "$DQS_KEY" ]]; then
     log_error "DQS key cannot be empty."
     exit 1
@@ -66,13 +87,19 @@ if ! [[ "$DQS_KEY" =~ ^[a-zA-Z0-9]+$ ]] || [[ ${#DQS_KEY} -lt 10 ]]; then
     exit 1
 fi
 
-read -rp "  Gateway hostname (FQDN, e.g. gateway.example.com): " HOSTNAME_GW
+if [[ -n "$DEFAULT_HOSTNAME" ]]; then
+    read -rp "  Gateway hostname FQDN (${DEFAULT_HOSTNAME}): " HOSTNAME_GW
+    HOSTNAME_GW="${HOSTNAME_GW:-$DEFAULT_HOSTNAME}"
+else
+    read -rp "  Gateway hostname (FQDN, e.g. gateway.example.com): " HOSTNAME_GW
+fi
 if [[ -z "$HOSTNAME_GW" ]]; then
     log_error "Hostname cannot be empty."
     exit 1
 fi
 
-read -rp "  Is your DQS key HBL enabled? (y/n): " HBL_INPUT
+read -rp "  Is your DQS key HBL enabled? (${DEFAULT_HBL}): " HBL_INPUT
+HBL_INPUT="${HBL_INPUT:-$DEFAULT_HBL}"
 HBL_ENABLED="n"
 [[ "${HBL_INPUT,,}" == "y" || "${HBL_INPUT,,}" == "yes" ]] && HBL_ENABLED="y"
 
@@ -83,6 +110,15 @@ echo -e "  HBL:        ${CYAN}${HBL_ENABLED}${NC}"
 echo ""
 read -rp "  Proceed with installation? (y/n): " confirm
 [[ "${confirm,,}" != "y" ]] && { echo "Aborted."; exit 0; }
+
+# Save configuration for future runs
+cat > "$ENV_FILE" <<ENVEOF
+DQS_KEY="${DQS_KEY}"
+HOSTNAME_GW="${HOSTNAME_GW}"
+HBL_ENABLED="${HBL_ENABLED}"
+ENVEOF
+chmod 600 "$ENV_FILE"
+log_info "Configuration saved to .env"
 
 # ---------------------------------------------------------------------------
 # Step 2: Install packages
