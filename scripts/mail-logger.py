@@ -67,7 +67,9 @@ def parse_line(line):
     if "postfix/" not in line:
         return
 
-    ts_match = re.match(r"^(\w+\s+\d+\s+\d+:\d+:\d+)", line)
+    ts_match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", line)
+    if not ts_match:
+        ts_match = re.match(r"^(\w+\s+\d+\s+\d+:\d+:\d+)", line)
     if not ts_match:
         return
     timestamp = ts_match.group(1)
