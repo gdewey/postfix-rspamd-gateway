@@ -90,9 +90,9 @@ LOGS
     journalctl -u postfix -f
     journalctl -u spamassassin -f
 
-  Logs por dominio (CSV):
-    ls /var/log/mail-gateway/
-    cat /var/log/mail-gateway/ejemplo.com/2026-03-14.csv
+  Logs por dominio:
+    ls /var/log/spamhaus/
+    cat /var/log/spamhaus/ejemplo.com/activity.log
 
   Formato CSV:
     timestamp,sender,recipient,status,reason
@@ -141,5 +141,5 @@ ESTRUCTURA DE ARCHIVOS
   /etc/postfix/                   Configuracion Postfix (con clave DQS)
   /etc/spamassassin/              Configuracion SA + plugin Spamhaus DQS
   /opt/mail-gateway/scripts/      Mail logger
-  /var/log/mail-gateway/          Logs CSV por dominio
+  /var/log/spamhaus/              Logs por dominio (activity.log)
   /var/lib/mail-gateway/          Estado del logger (posicion de lectura)

@@ -247,11 +247,11 @@ cp "${SCRIPT_DIR}/scripts/mail-logger.py" /opt/mail-gateway/scripts/mail-logger.
 chmod +x /opt/mail-gateway/scripts/mail-logger.py
 cp "${SCRIPT_DIR}/scripts/mail-logger.service" /etc/systemd/system/mail-logger.service
 
-mkdir -p /var/log/mail-gateway
+mkdir -p /var/log/spamhaus
 mkdir -p /var/lib/mail-gateway
 
 log_info "Mail logger installed at /opt/mail-gateway/scripts/mail-logger.py"
-log_info "Per-domain logs will be at /var/log/mail-gateway/<domain>/<date>.csv"
+log_info "Per-domain logs at /var/log/spamhaus/<domain>/activity.log"
 
 log_step 6 "Configuring spamass-milter..."
 
@@ -350,5 +350,5 @@ echo "  Check Postfix config: postfix check"
 echo "  View mail logs:       journalctl -u postfix -f"
 echo "  View SA logs:         journalctl -u spamassassin -f"
 echo "  View logger status:   systemctl status mail-logger"
-echo "  Browse domain logs:   ls /var/log/mail-gateway/"
+echo "  Browse domain logs:   ls /var/log/spamhaus/"
 echo ""
