@@ -2,6 +2,20 @@
   POSTFIX + SPAMASSASSIN MAIL GATEWAY - Spamhaus DQS
 ===============================================================================
 
+Automated setup for a mail filtering gateway that receives incoming email,
+filters it through multiple layers of spam protection (Spamhaus DQS DNSBL,
+SpamAssassin content analysis, HBL hash-based blocklists, and dangerous
+attachment blocking), then relays clean mail to destination SMTP servers
+based on per-domain routing rules.
+
+Designed for use as a front-line mail gateway that sits between the internet
+and your internal mail servers, providing enterprise-grade spam filtering
+with Spamhaus real-time data.
+
+Author: Gilberto Dewey (https://github.com/gdewey)
+Built with the assistance of Claude (Anthropic)
+
+
 REQUIREMENTS
 ------------
 - Ubuntu 24.04 LTS
