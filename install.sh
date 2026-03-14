@@ -93,8 +93,8 @@ export DEBIAN_FRONTEND=noninteractive
 debconf-set-selections <<< "postfix postfix/mailname string ${HOSTNAME_GW}"
 debconf-set-selections <<< "postfix postfix/main_mailer_type string Internet Site"
 
-apt-get update -qq
-apt-get install -y -qq \
+apt-get update -qq || { log_error "apt-get update failed"; exit 1; }
+apt-get install -y \
     postfix \
     spamassassin \
     spamc \
@@ -103,7 +103,7 @@ apt-get install -y -qq \
     libmail-dkim-perl \
     git \
     ssl-cert \
-    > /dev/null 2>&1
+    || { log_error "apt-get install failed"; exit 1; }
 
 log_info "Packages installed."
 
@@ -290,17 +290,80 @@ log_info "All services started."
 chmod +x "${SCRIPT_DIR}/update-domains.sh"
 
 # ---------------------------------------------------------------------------
-# Verify
+# Verify: services, configs, directories
 # ---------------------------------------------------------------------------
 echo ""
 echo -e "${BOLD}========================================${NC}"
-echo -e "${GREEN}${BOLD} Installation complete!${NC}"
+echo -e "${BOLD} Verification${NC}"
+echo -e "${BOLD}========================================${NC}"
+echo ""
+
+ERRORS=0
+
+for svc in postfix spamassassin spamass-milter mail-logger; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        echo -e "  ${GREEN}OK${NC}  ${svc} is running"
+    else
+        echo -e "  ${RED}FAIL${NC}  ${svc} is NOT running"
+        ERRORS=$((ERRORS + 1))
+    fi
+done
+
+echo ""
+
+if postfix check 2>/dev/null; then
+    echo -e "  ${GREEN}OK${NC}  postfix check passed"
+else
+    echo -e "  ${RED}FAIL${NC}  postfix check found errors"
+    ERRORS=$((ERRORS + 1))
+fi
+
+SA_LINT=$(spamassassin --lint 2>&1)
+if [[ -z "$SA_LINT" ]]; then
+    echo -e "  ${GREEN}OK${NC}  spamassassin --lint passed"
+else
+    echo -e "  ${YELLOW}WARN${NC}  spamassassin --lint returned warnings"
+    echo "        $SA_LINT" | head -3
+fi
+
+if ss -tlnp 2>/dev/null | grep -q ':25 '; then
+    echo -e "  ${GREEN}OK${NC}  Port 25 is listening"
+else
+    echo -e "  ${RED}FAIL${NC}  Port 25 is NOT listening"
+    ERRORS=$((ERRORS + 1))
+fi
+
+if [[ -S /var/spool/postfix/spamass/spamass.sock ]]; then
+    echo -e "  ${GREEN}OK${NC}  Milter socket exists"
+else
+    echo -e "  ${YELLOW}WARN${NC}  Milter socket not found yet (may take a few seconds)"
+fi
+
+if [[ -d /var/log/spamhaus ]]; then
+    echo -e "  ${GREEN}OK${NC}  Log directory /var/log/spamhaus/ exists"
+else
+    mkdir -p /var/log/spamhaus
+    echo -e "  ${GREEN}OK${NC}  Log directory /var/log/spamhaus/ created"
+fi
+
+echo ""
+
+if [[ $ERRORS -eq 0 ]]; then
+    echo -e "${GREEN}${BOLD}  All checks passed!${NC}"
+else
+    echo -e "${RED}${BOLD}  ${ERRORS} check(s) failed. Review the output above.${NC}"
+fi
+
+echo ""
+echo -e "${BOLD}========================================${NC}"
+echo -e "${BOLD} Configuration Summary${NC}"
 echo -e "${BOLD}========================================${NC}"
 echo ""
 echo -e "  Gateway hostname:  ${CYAN}${HOSTNAME_GW}${NC}"
 echo -e "  DQS key:           ${CYAN}${DQS_KEY:0:6}...${DQS_KEY: -4}${NC}"
 echo -e "  HBL enabled:       ${CYAN}${HBL_ENABLED}${NC}"
 echo -e "  Relay domains:     ${CYAN}${DOMAIN_COUNT}${NC}"
+echo -e "  Logs:              ${CYAN}/var/log/spamhaus/<domain>/activity.log${NC}"
 echo ""
 echo -e "${BOLD}Next steps:${NC}"
 echo "  1. Edit ${SCRIPT_DIR}/domains.conf to add your relay domains"
