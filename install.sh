@@ -124,7 +124,7 @@ log_info "Configuration saved to .env"
 # Stop existing services before installing (avoids dpkg conflicts)
 # ---------------------------------------------------------------------------
 RUNNING_SERVICES=""
-for svc in mail-logger spamass-milter spamassassin postfix; do
+for svc in mail-logger spamass-milter spamd spamassassin postfix; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         RUNNING_SERVICES="${RUNNING_SERVICES} ${svc}"
     fi
@@ -343,8 +343,15 @@ log_step 7 "Starting services..."
 sed -i 's/^ENABLED=0/ENABLED=1/' /etc/default/spamassassin 2>/dev/null || true
 systemctl daemon-reload
 
+# Ubuntu 24.04 uses "spamd" service name, older versions use "spamassassin"
+if systemctl list-unit-files spamd.service >/dev/null 2>&1; then
+    SA_SERVICE="spamd"
+else
+    SA_SERVICE="spamassassin"
+fi
+
 START_ERRORS=0
-for svc in spamassassin spamass-milter postfix mail-logger; do
+for svc in $SA_SERVICE spamass-milter postfix mail-logger; do
     systemctl enable "$svc" --quiet 2>/dev/null || true
     if systemctl restart "$svc" 2>/dev/null; then
         log_info "${svc} started."
@@ -376,7 +383,7 @@ echo ""
 
 ERRORS=0
 
-for svc in postfix spamassassin spamass-milter mail-logger; do
+for svc in postfix $SA_SERVICE spamass-milter mail-logger; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         echo -e "  ${GREEN}OK${NC}  ${svc} is running"
     else
