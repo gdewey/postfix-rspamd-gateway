@@ -1,0 +1,36 @@
+###############################################################################
+# SpamAssassin local.cf - Mail Gateway Configuration
+#
+# The Spamhaus DQS rules are loaded separately from sh.cf / sh_hbl.cf
+# (installed by install.sh from the spamassassin-dqs GitHub repo).
+###############################################################################
+
+# --- Scoring threshold ---
+required_score 5.0
+
+# --- Tagging ---
+rewrite_header Subject [SPAM]
+report_safe 0
+add_header all Report _REPORT_
+add_header spam Flag _YESNOCAPS_
+add_header all Status _YESNO_, score=_SCORE_ required=_REQD_ tests=_TESTS_ autolearn=_AUTOLEARN_
+
+# --- Bayes ---
+use_bayes 1
+bayes_auto_learn 1
+bayes_auto_learn_threshold_nonspam 0.1
+bayes_auto_learn_threshold_spam 12.0
+bayes_path /var/lib/spamassassin/.spamassassin/bayes
+
+# --- Network tests ---
+skip_rbl_checks 0
+dns_available yes
+
+# --- Pyzor (collaborative filtering) ---
+use_pyzor 1
+
+# --- Razor (collaborative filtering) ---
+use_razor2 1
+
+# --- Misc ---
+lock_method flock

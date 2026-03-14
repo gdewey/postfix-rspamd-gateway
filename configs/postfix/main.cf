@@ -1,0 +1,129 @@
+###############################################################################
+# Postfix main.cf - Mail Gateway with Spamhaus DQS
+#
+# Placeholders replaced by install.sh:
+#   __DQS_KEY__   -> Spamhaus DQS key
+#   __HOSTNAME__  -> Gateway FQDN hostname
+###############################################################################
+
+# --- Identity ---
+myhostname = __HOSTNAME__
+myorigin = $myhostname
+smtp_helo_name = $myhostname
+mydomain = __HOSTNAME__
+
+# --- Network ---
+inet_interfaces = all
+inet_protocols = ipv4
+
+# --- Gateway mode: no local delivery, relay only ---
+mydestination =
+local_recipient_maps =
+local_transport = error:no local mail delivery
+
+# --- Trusted networks ---
+mynetworks = 127.0.0.0/8 [::1]/128
+
+# --- Relay and transport routing ---
+relay_domains = hash:/etc/postfix/relay_domains
+transport_maps = hash:/etc/postfix/transport
+relay_recipient_maps =
+
+# --- Message limits ---
+message_size_limit = 52428800
+mailbox_size_limit = 0
+
+# --- Queue tuning ---
+queue_run_delay = 300s
+minimal_backoff_time = 300s
+maximal_backoff_time = 4000s
+maximal_queue_lifetime = 5d
+bounce_queue_lifetime = 5d
+
+# --- TLS (outbound) ---
+smtp_tls_security_level = may
+smtp_tls_loglevel = 1
+
+# --- TLS (inbound) ---
+smtpd_tls_security_level = may
+smtpd_tls_cert_file = /etc/ssl/certs/ssl-cert-snakeoil.pem
+smtpd_tls_key_file = /etc/ssl/private/ssl-cert-snakeoil.key
+smtpd_tls_loglevel = 1
+
+# --- Security hardening ---
+smtpd_banner = $myhostname ESMTP
+disable_vrfy_command = yes
+smtpd_error_sleep_time = 1s
+smtpd_soft_error_limit = 5
+smtpd_hard_error_limit = 10
+smtpd_client_connection_rate_limit = 30
+smtpd_client_message_rate_limit = 60
+smtpd_client_recipient_rate_limit = 120
+
+# --- TLS hardening ---
+smtpd_tls_mandatory_protocols = >=TLSv1.2
+smtpd_tls_protocols = >=TLSv1.2
+smtp_tls_mandatory_protocols = >=TLSv1.2
+smtp_tls_protocols = >=TLSv1.2
+tls_preempt_cipherlist = yes
+
+# --- SMTP restrictions ---
+smtpd_helo_required = yes
+smtpd_delay_reject = yes
+strict_rfc821_envelopes = yes
+
+smtpd_client_restrictions =
+    permit_mynetworks,
+    reject_unknown_reverse_client_hostname
+
+smtpd_helo_restrictions =
+    permit_mynetworks,
+    reject_invalid_helo_hostname,
+    reject_non_fqdn_helo_hostname
+
+smtpd_sender_restrictions =
+    permit_mynetworks,
+    reject_non_fqdn_sender,
+    reject_unknown_sender_domain
+
+smtpd_relay_restrictions =
+    permit_mynetworks,
+    reject_unauth_destination
+
+smtpd_recipient_restrictions =
+    permit_mynetworks,
+    reject_unauth_destination,
+    reject_non_fqdn_recipient,
+    reject_unknown_recipient_domain,
+    reject_rhsbl_sender __DQS_KEY__.dbl.dq.spamhaus.net=127.0.1.[2..99],
+    reject_rhsbl_helo __DQS_KEY__.dbl.dq.spamhaus.net=127.0.1.[2..99],
+    reject_rhsbl_reverse_client __DQS_KEY__.dbl.dq.spamhaus.net=127.0.1.[2..99],
+    reject_rhsbl_sender __DQS_KEY__.zrd.dq.spamhaus.net=127.0.2.[2..24],
+    reject_rhsbl_helo __DQS_KEY__.zrd.dq.spamhaus.net=127.0.2.[2..24],
+    reject_rhsbl_reverse_client __DQS_KEY__.zrd.dq.spamhaus.net=127.0.2.[2..24],
+    reject_rbl_client __DQS_KEY__.zen.dq.spamhaus.net=127.0.0.[2..255],
+    permit
+
+smtpd_data_restrictions =
+    reject_unauth_pipelining
+
+# --- Dangerous attachment blocking (Spamhaus recommendation) ---
+mime_header_checks = regexp:/etc/postfix/header_checks
+header_checks = regexp:/etc/postfix/header_checks
+
+# --- Spamhaus DNSBL custom rejection messages ---
+rbl_reply_maps = hash:/etc/postfix/dnsbl-reply-map
+
+# --- Postscreen: connection-level DNSBL filtering ---
+postscreen_dnsbl_sites = __DQS_KEY__.zen.dq.spamhaus.net=127.0.0.[2..255]
+postscreen_dnsbl_reply_map = texthash:/etc/postfix/dnsbl_reply
+postscreen_access_list = permit_mynetworks
+postscreen_dnsbl_threshold = 1
+postscreen_dnsbl_action = enforce
+postscreen_greet_action = enforce
+
+# --- SpamAssassin milter ---
+smtpd_milters = unix:spamass/spamass.sock
+non_smtpd_milters = $smtpd_milters
+milter_default_action = accept
+milter_connect_macros = j {daemon_name} v {if_name} _

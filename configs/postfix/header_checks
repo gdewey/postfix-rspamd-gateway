@@ -1,0 +1,12 @@
+# Block dangerous attachment types (Spamhaus recommendation)
+# https://github.com/spamhaus/spamassassin-dqs#final-recommendations
+/^Content-(Disposition|Type).*name\s*=\s*"?.*\.(exe|vbs|pif|scr|bat|cmd|com|cpl|dll|cpgz|chm|js|jar|wsf)"?\s*$/
+    REJECT Attachment type banned: .$2 files are not allowed
+
+# Block Office documents with macros
+/^Content-(Disposition|Type).*name\s*=\s*"?.*\.(docm|xlsm|pptm|dotm|xltm|potm)"?\s*$/
+    REJECT Attachment type banned: macro-enabled Office documents are not allowed
+
+# Block double file extensions (common malware trick)
+/^Content-(Disposition|Type).*name\s*=\s*"?.*\.\w{2,4}\.(exe|vbs|pif|scr|bat|cmd|com|js)"?\s*$/
+    REJECT Attachment type banned: suspicious double extension

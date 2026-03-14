@@ -1,0 +1,11 @@
+# Spamhaus DQS - Postscreen DNSBL reply map (texthash)
+# Placeholder __DQS_KEY__ is replaced by install.sh
+#
+# Used with: postscreen_dnsbl_reply_map = texthash:/etc/postfix/dnsbl_reply
+
+__DQS_KEY__.sbl.dq.spamhaus.net        sbl.spamhaus.org
+__DQS_KEY__.xbl.dq.spamhaus.net        xbl.spamhaus.org
+__DQS_KEY__.pbl.dq.spamhaus.net        pbl.spamhaus.org
+__DQS_KEY__.zen.dq.spamhaus.net        zen.spamhaus.org
+__DQS_KEY__.dbl.dq.spamhaus.net        dbl.spamhaus.org
+__DQS_KEY__.zrd.dq.spamhaus.net        zrd.spamhaus.org

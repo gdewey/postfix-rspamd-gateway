@@ -1,0 +1,17 @@
+[Unit]
+Description=Mail Gateway Log Parser
+Documentation=file:///opt/mail-gateway/scripts/mail-logger.py
+After=postfix.service
+Requires=postfix.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/mail-gateway/scripts/mail-logger.py --catchup
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mail-logger
+
+[Install]
+WantedBy=multi-user.target
