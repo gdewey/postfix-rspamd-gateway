@@ -121,6 +121,40 @@ chmod 600 "$ENV_FILE"
 log_info "Configuration saved to .env"
 
 # ---------------------------------------------------------------------------
+# Stop existing services before installing (avoids dpkg conflicts)
+# ---------------------------------------------------------------------------
+RUNNING_SERVICES=""
+for svc in mail-logger spamass-milter spamassassin postfix; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        RUNNING_SERVICES="${RUNNING_SERVICES} ${svc}"
+    fi
+done
+
+if [[ -n "$RUNNING_SERVICES" ]]; then
+    echo ""
+    echo -e "  ${YELLOW}Active services detected:${NC}${RUNNING_SERVICES}"
+    read -rp "  Stop them to proceed with installation? (y/n): " stop_svcs
+    if [[ "${stop_svcs,,}" == "y" ]]; then
+        for svc in $RUNNING_SERVICES; do
+            systemctl stop "$svc" 2>/dev/null || true
+        done
+        # Kill any orphan spamass-milter processes
+        pkill -x spamass-milter 2>/dev/null || true
+        sleep 1
+        log_info "Services stopped."
+    else
+        log_error "Cannot install while services are running. Aborted."
+        exit 1
+    fi
+else
+    # Kill orphan processes even if systemd doesn't know about them
+    pkill -x spamass-milter 2>/dev/null || true
+fi
+
+# Fix any broken dpkg state from a previous failed run
+dpkg --configure -a 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
 # Step 2: Install packages
 # ---------------------------------------------------------------------------
 log_step 1 "Installing packages..."
