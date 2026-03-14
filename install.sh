@@ -285,46 +285,8 @@ systemctl restart mail-logger
 log_info "All services started."
 
 # ---------------------------------------------------------------------------
-# Create helper script: update-domains.sh
+# Ensure update-domains.sh is executable
 # ---------------------------------------------------------------------------
-cat > "${SCRIPT_DIR}/update-domains.sh" <<'UPDATESCRIPT'
-#!/bin/bash
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOMAINS_CONF="${SCRIPT_DIR}/domains.conf"
-TRANSPORT="/etc/postfix/transport"
-RELAY_DOMAINS="/etc/postfix/relay_domains"
-
-if [[ $EUID -ne 0 ]]; then
-    echo "Run as root: sudo $0"
-    exit 1
-fi
-
-> "${TRANSPORT}"
-> "${RELAY_DOMAINS}"
-COUNT=0
-
-if [[ -f "${DOMAINS_CONF}" ]]; then
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${line// /}" ]] && continue
-        domain=$(echo "$line" | awk '{print $1}')
-        relay=$(echo "$line"  | awk '{print $2}')
-        port=$(echo "$line"   | awk '{print $3}')
-        [[ -z "$domain" || -z "$relay" ]] && continue
-        port="${port:-25}"
-        echo "${domain}    smtp:[${relay}]:${port}" >> "${TRANSPORT}"
-        echo "${domain}    OK" >> "${RELAY_DOMAINS}"
-        COUNT=$((COUNT + 1))
-    done < "${DOMAINS_CONF}"
-fi
-
-postmap hash:"${TRANSPORT}"
-postmap hash:"${RELAY_DOMAINS}"
-postfix reload
-
-echo "Done. ${COUNT} domain(s) configured."
-UPDATESCRIPT
 chmod +x "${SCRIPT_DIR}/update-domains.sh"
 
 # ---------------------------------------------------------------------------
