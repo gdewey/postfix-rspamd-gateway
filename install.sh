@@ -341,21 +341,24 @@ log_info "Milter socket: /var/spool/postfix/spamass/spamass.sock"
 log_step 7 "Starting services..."
 
 sed -i 's/^ENABLED=0/ENABLED=1/' /etc/default/spamassassin 2>/dev/null || true
-
-systemctl enable spamassassin  --quiet 2>/dev/null
-systemctl restart spamassassin
-
-systemctl enable spamass-milter --quiet 2>/dev/null
-systemctl restart spamass-milter
-
-systemctl enable postfix --quiet 2>/dev/null
-systemctl restart postfix
-
 systemctl daemon-reload
-systemctl enable mail-logger --quiet 2>/dev/null
-systemctl restart mail-logger
 
-log_info "All services started."
+START_ERRORS=0
+for svc in spamassassin spamass-milter postfix mail-logger; do
+    systemctl enable "$svc" --quiet 2>/dev/null || true
+    if systemctl restart "$svc" 2>/dev/null; then
+        log_info "${svc} started."
+    else
+        log_warn "${svc} failed to start. Check: journalctl -u ${svc} --no-pager -n 20"
+        START_ERRORS=$((START_ERRORS + 1))
+    fi
+done
+
+if [[ $START_ERRORS -eq 0 ]]; then
+    log_info "All services started."
+else
+    log_warn "${START_ERRORS} service(s) failed to start. Review warnings above."
+fi
 
 # ---------------------------------------------------------------------------
 # Ensure update-domains.sh is executable
