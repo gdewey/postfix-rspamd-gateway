@@ -2,144 +2,183 @@
   POSTFIX + SPAMASSASSIN MAIL GATEWAY - Spamhaus DQS
 ===============================================================================
 
-REQUISITOS
-----------
+REQUIREMENTS
+------------
 - Ubuntu 24.04 LTS
-- Acceso root
-- Clave DQS de Spamhaus (https://www.spamhaustech.com)
-- Puerto 25 abierto en firewall
+- Root access
+- Spamhaus DQS key (https://www.spamhaustech.com)
+- Port 25 open on firewall
+
+DNS requirements (configure BEFORE installing):
+- A record:   gateway.yourdomain.com -> server IP
+- PTR record: server IP -> gateway.yourdomain.com
+  (PTR is configured in your VPS/hosting provider panel)
+- Both must point to the same hostname (FCrDNS)
 
 
-INSTALACION
------------
-1. Copiar todo este directorio al servidor:
+INSTALLATION
+------------
+1. Copy the entire directory to your server:
 
-     scp -r postfix-rspamd/ root@servidor:/opt/mail-gateway/
+     scp -r postfix-rspamd/ root@server:/opt/mail-gateway/
 
-2. Editar domains.conf con los dominios y servidores relay:
+2. Edit domains.conf with your domains and relay servers:
 
      vim /opt/mail-gateway/domains.conf
 
-3. Ejecutar el instalador:
+3. Run the installer:
 
      cd /opt/mail-gateway
      sudo ./install.sh
 
-   El script preguntara:
-     - Clave DQS de Spamhaus
-     - Hostname del gateway (FQDN)
-     - Si la clave tiene HBL habilitado (y/n)
+   The script will ask for:
+     - Spamhaus DQS key
+     - Gateway hostname (FQDN)
+     - Whether the key has HBL enabled (y/n)
+
+   Answers are saved to .env for future runs. When re-running the
+   installer, previous values appear as defaults and can be accepted
+   by pressing Enter.
 
 
-ACTUALIZAR DOMINIOS (sin reinstalar)
--------------------------------------
-1. Editar domains.conf
-2. Ejecutar:
+RE-INSTALL / UPDATE
+-------------------
+The installer is idempotent. It can be run multiple times safely:
+
+     sudo ./install.sh
+
+It detects active services and asks to stop them before proceeding.
+Previous configuration is loaded from .env.
+
+
+UPDATING DOMAINS (without reinstalling)
+----------------------------------------
+1. Edit domains.conf
+2. Run:
 
      sudo ./update-domains.sh
 
+This regenerates the Postfix transport maps and reloads the config.
+No service restart required.
 
-SERVICIOS
----------
-El gateway usa 4 servicios independientes:
 
-  +-------------------+------------------------------------------+
-  | Servicio          | Funcion                                  |
-  +-------------------+------------------------------------------+
-  | postfix           | MTA - recibe y reenvía correo            |
-  | spamassassin      | Daemon spamd - filtrado de contenido     |
-  | spamass-milter    | Conecta Postfix con SpamAssassin         |
-  | mail-logger       | Parser de logs, genera CSV por dominio   |
-  +-------------------+------------------------------------------+
+SERVICES
+--------
+The gateway runs 4 independent services:
 
-Comandos para cada servicio:
+  +-------------------+----------------------------------------------+
+  | Service           | Purpose                                      |
+  +-------------------+----------------------------------------------+
+  | postfix           | MTA - receives and relays mail               |
+  | spamd             | SpamAssassin daemon - content filtering       |
+  | spamass-milter    | Connects Postfix to SpamAssassin             |
+  | mail-logger       | Real-time log parser, per-domain CSV output  |
+  +-------------------+----------------------------------------------+
 
-  Iniciar:
+  Note: on Ubuntu 24.04 the SpamAssassin service is called "spamd".
+  On older versions it may be called "spamassassin". The installer
+  detects the correct name automatically.
+
+Service commands:
+
+  Start:
     sudo systemctl start postfix
-    sudo systemctl start spamassassin
+    sudo systemctl start spamd
     sudo systemctl start spamass-milter
     sudo systemctl start mail-logger
 
-  Detener:
+  Stop:
     sudo systemctl stop mail-logger
     sudo systemctl stop spamass-milter
-    sudo systemctl stop spamassassin
+    sudo systemctl stop spamd
     sudo systemctl stop postfix
 
-  Reiniciar:
+  Restart:
     sudo systemctl restart postfix
-    sudo systemctl restart spamassassin
+    sudo systemctl restart spamd
     sudo systemctl restart spamass-milter
     sudo systemctl restart mail-logger
 
-  Ver estado:
+  Check status:
     sudo systemctl status postfix
-    sudo systemctl status spamassassin
+    sudo systemctl status spamd
     sudo systemctl status spamass-milter
     sudo systemctl status mail-logger
 
-  Ver estado rapido de todos:
-    for s in postfix spamassassin spamass-milter mail-logger; do
+  Quick status for all:
+    for s in postfix spamd spamass-milter mail-logger; do
       printf "%-20s %s\n" "$s" "$(systemctl is-active $s)"
     done
+
+  All services start automatically on server reboot.
 
 
 LOGS
 ----
-  Logs del sistema (Postfix/SA):
+  System logs (Postfix/SA):
     journalctl -u postfix -f
-    journalctl -u spamassassin -f
+    journalctl -u spamd -f
 
-  Logs por dominio:
+  Per-domain logs:
     ls /var/log/spamhaus/
-    cat /var/log/spamhaus/ejemplo.com/activity.log
+    cat /var/log/spamhaus/example.com/activity.log
 
-  Formato CSV:
+  CSV format:
     timestamp,sender,recipient,status,reason
 
   Statuses:
-    relay  - Correo aceptado y entregado al servidor destino
-    block  - Rechazado (DNSBL, SpamAssassin, adjunto peligroso, etc.)
-    spam   - Marcado como spam pero entregado (score entre 5 y 15)
-    defer  - Entrega temporal fallida, se reintentara
-    bounce - Entrega permanentemente fallida
+    relay  - Mail accepted and delivered to destination server
+    block  - Rejected (DNSBL, SpamAssassin, dangerous attachment, etc.)
+    spam   - Tagged as spam but still delivered (score between 5 and 15)
+    defer  - Temporary delivery failure, will retry
+    bounce - Permanent delivery failure
+
+  Per-domain subdirectories are created automatically when the first
+  mail arrives for that domain.
 
 
-VERIFICACION
+VERIFICATION
 ------------
-  Verificar configuracion de SpamAssassin:
+  Verify SpamAssassin configuration:
     spamassassin --lint
 
-  Verificar configuracion de Postfix:
+  Verify Postfix configuration:
     postfix check
 
-  Probar la instalacion de Spamhaus:
-    Ir a http://blt.spamhaus.com y enviar un email de prueba
+  Verify you are not an open relay (must respond "Relay access denied"):
+    telnet localhost 25
+    EHLO test
+    MAIL FROM:<test@test.com>
+    RCPT TO:<user@unconfigured-domain.com>
+
+  Test Spamhaus integration:
+    Go to http://blt.spamhaus.com and send a test email
 
 
-ESTRUCTURA DE ARCHIVOS
-----------------------
-  /opt/mail-gateway/              (o donde se copie el proyecto)
-  ├── install.sh                  Script de instalacion
-  ├── update-domains.sh           Actualizar dominios (se genera al instalar)
-  ├── domains.conf                Mapeo dominio -> relay SMTP
-  ├── readme.txt                  Este archivo
+FILE STRUCTURE
+--------------
+  /opt/mail-gateway/              (or wherever the project is copied)
+  ├── install.sh                  Interactive installation script
+  ├── update-domains.sh           Update domains without reinstalling
+  ├── domains.conf                Domain -> relay SMTP mapping
+  ├── .env                        Saved config (generated on install)
+  ├── readme.txt                  This file
   ├── configs/
   │   ├── postfix/
-  │   │   ├── main.cf             Configuracion principal Postfix
-  │   │   ├── master.cf           Servicios Postfix (postscreen)
-  │   │   ├── dnsbl-reply-map     Mensajes de rechazo Spamhaus
-  │   │   ├── dnsbl_reply         Postscreen DNSBL reply
-  │   │   └── header_checks       Bloqueo de adjuntos peligrosos
+  │   │   ├── main.cf             Postfix main configuration
+  │   │   ├── master.cf           Postfix services (postscreen enabled)
+  │   │   ├── dnsbl-reply-map     Spamhaus rejection messages
+  │   │   ├── dnsbl_reply         Postscreen DNSBL reply map
+  │   │   └── header_checks       Dangerous attachment blocking
   │   └── spamassassin/
-  │       └── local.cf            Configuracion SpamAssassin
+  │       └── local.cf            SpamAssassin configuration
   └── scripts/
-      ├── mail-logger.py          Parser de logs en tiempo real
-      └── mail-logger.service     Servicio systemd para el logger
+      ├── mail-logger.py          Real-time log parser daemon
+      └── mail-logger.service     Systemd service for the logger
 
-  Archivos desplegados en el servidor:
-  /etc/postfix/                   Configuracion Postfix (con clave DQS)
-  /etc/spamassassin/              Configuracion SA + plugin Spamhaus DQS
+  Files deployed on the server:
+  /etc/postfix/                   Postfix config (with DQS key applied)
+  /etc/spamassassin/              SA config + Spamhaus DQS plugin
   /opt/mail-gateway/scripts/      Mail logger
-  /var/log/spamhaus/              Logs por dominio (activity.log)
-  /var/lib/mail-gateway/          Estado del logger (posicion de lectura)
+  /var/log/spamhaus/              Per-domain logs (activity.log)
+  /var/lib/mail-gateway/          Logger state (read position tracking)
