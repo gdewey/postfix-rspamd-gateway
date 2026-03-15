@@ -20,6 +20,40 @@ Author: Guillermo Dewey (https://ofik.com)
 
 
 
+ABOUT SPAMHAUS DQS (Data Query Service)
+----------------------------------------
+This project is built around Spamhaus DQS, a DNS-based threat intelligence
+service that provides real-time blocklists and reputation data for mail
+filtering. DQS is the commercial evolution of the classic public Spamhaus
+DNSBL mirrors.
+
+  ** This setup targets the COMMERCIAL (paid) version of Spamhaus DQS. **
+  The free/public Spamhaus mirrors impose strict query rate limits that are
+  quickly exceeded by any production mail server. The commercial DQS key
+  removes these limits, providing unlimited query volume suitable for
+  high-traffic environments.
+
+Key advantages of Spamhaus DQS:
+
+  - Real-time threat data: blocklists updated continuously (not hourly or
+    daily), catching new spam sources within minutes of detection.
+  - Multiple blocklists in one service: SBL (known spam sources), CSS
+    (snowshoe spam), XBL (exploited hosts/botnets), PBL (dynamic/residential
+    IPs), and DBL (domain-based blocklist) -- all queried via DNS.
+  - HBL (Hash Blocklist): identifies spam by content hashes (cryptowallet
+    addresses, malware file hashes, email addresses), catching threats that
+    IP-based lists miss.
+  - Zero-delay lookups: DNS queries resolve in milliseconds with no external
+    API calls or HTTP overhead, adding negligible latency to mail processing.
+  - No local mirror maintenance: unlike rsync-based RBLDNSD setups, DQS
+    requires no local infrastructure -- queries go directly to Spamhaus
+    anycast DNS.
+  - Proven coverage: Spamhaus data protects over 3 billion mailboxes
+    worldwide and is used by ISPs, enterprises, and governments.
+  - Low false-positive rate: conservative listing policies minimize
+    legitimate mail being blocked.
+
+
 REQUIREMENTS
 ------------
 - Ubuntu 24.04 LTS
