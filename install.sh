@@ -390,9 +390,9 @@ if [[ "$SRS_ENABLED" == "y" ]]; then
         r /dev/stdin
         d
     }' /etc/postfix/main.cf <<'SRSEOF'
-sender_canonical_maps = tcp:localhost:10001
+sender_canonical_maps = tcp:127.0.0.1:10001
 sender_canonical_classes = envelope_sender
-recipient_canonical_maps = tcp:localhost:10002
+recipient_canonical_maps = tcp:127.0.0.1:10002
 recipient_canonical_classes = envelope_recipient,bounce_recipient
 SRSEOF
     sed -i 's/__SRS_RELAY_HOSTNAME__/$myhostname/' /etc/postfix/main.cf
@@ -657,6 +657,17 @@ if [[ -S /var/spool/postfix/spamass/spamass.sock ]]; then
     echo -e "  ${GREEN}OK${NC}  Milter socket exists"
 else
     echo -e "  ${YELLOW}WARN${NC}  Milter socket not found yet (may take a few seconds)"
+fi
+
+if [[ "$SRS_ENABLED" == "y" ]]; then
+    if ss -tlnp 2>/dev/null | grep -q ':10001 '; then
+        echo -e "  ${GREEN}OK${NC}  postsrsd listening on port 10001"
+    else
+        echo -e "  ${RED}FAIL${NC}  postsrsd NOT listening on port 10001"
+        echo -e "        ${YELLOW}Postfix will hang if postsrsd is unreachable.${NC}"
+        echo -e "        ${YELLOW}Check: journalctl -u postsrsd --no-pager -n 20${NC}"
+        ERRORS=$((ERRORS + 1))
+    fi
 fi
 
 if [[ -d /var/log/spamhaus ]]; then
