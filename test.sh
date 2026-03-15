@@ -77,35 +77,46 @@ echo ""
 echo -e "  Sending: ${CYAN}${SENDER}${NC} -> ${CYAN}${RECIPIENT}${NC}"
 echo ""
 
-SMTP_RESPONSE=$(cat <<SMTP_SESSION | nc -q 5 localhost 25 2>&1
-EHLO test.local
-MAIL FROM:<${SENDER}>
-RCPT TO:<${RECIPIENT}>
-DATA
-From: ${SENDER}
-To: ${RECIPIENT}
-Subject: Gateway test $(date +%H:%M:%S)
-Date: $(date -R)
+SMTP_OUTPUT=$(python3 -c "
+import smtplib
+import sys
+from email.mime.text import MIMEText
+from datetime import datetime
 
-This is an automated test from test.sh at $(date).
-.
-QUIT
-SMTP_SESSION
-)
+sender = '${SENDER}'
+recipient = '${RECIPIENT}'
 
-echo -e "${BOLD}--- SMTP Response ---${NC}"
-echo "$SMTP_RESPONSE"
-echo ""
+msg = MIMEText('This is an automated test from test.sh at ' + str(datetime.now()))
+msg['Subject'] = 'Gateway test ' + datetime.now().strftime('%H:%M:%S')
+msg['From'] = sender
+msg['To'] = recipient
 
-if echo "$SMTP_RESPONSE" | grep -q "queued"; then
-    QUEUE_ID=$(echo "$SMTP_RESPONSE" | grep -oP 'queued as \K[A-F0-9]+')
-    echo -e "  ${GREEN}ACCEPTED${NC} - Queued as ${QUEUE_ID}"
+try:
+    with smtplib.SMTP('localhost', 25) as s:
+        s.set_debuglevel(0)
+        response = s.sendmail(sender, [recipient], msg.as_string())
+        print('QUEUED')
+except smtplib.SMTPRecipientsRefused as e:
+    for addr, (code, msg_str) in e.recipients.items():
+        print(f'REJECTED {code} {msg_str.decode()}')
+except smtplib.SMTPSenderRefused as e:
+    print(f'SENDER_REFUSED {e.smtp_code} {e.smtp_error.decode()}')
+except smtplib.SMTPDataError as e:
+    print(f'DATA_ERROR {e.smtp_code} {e.smtp_error.decode()}')
+except Exception as e:
+    print(f'ERROR {e}')
+" 2>&1)
+
+echo -e "${BOLD}--- Result ---${NC}"
+
+if [[ "$SMTP_OUTPUT" == "QUEUED" ]]; then
+    echo -e "  ${GREEN}ACCEPTED${NC} - Message queued for delivery"
     echo ""
 
     sleep 2
 
     echo -e "${BOLD}--- Postfix Log ---${NC}"
-    grep "${QUEUE_ID}" /var/log/mail.log 2>/dev/null || echo "  (no log entries yet)"
+    grep "to=<${RECIPIENT}>" /var/log/mail.log 2>/dev/null | tail -3 || echo "  (no log entries yet)"
     echo ""
 
     LOG_FILE="/var/log/spamhaus/${RCPT_DOMAIN}/activity.log"
@@ -116,23 +127,33 @@ if echo "$SMTP_RESPONSE" | grep -q "queued"; then
         echo "  (no activity.log yet for ${RCPT_DOMAIN})"
     fi
 
-elif echo "$SMTP_RESPONSE" | grep -q "Relay access denied"; then
-    echo -e "  ${RED}REJECTED${NC} - Relay access denied"
-    echo "  Domain '${RCPT_DOMAIN}' is not in domains.conf"
+elif [[ "$SMTP_OUTPUT" == REJECTED* ]]; then
+    REASON="${SMTP_OUTPUT#REJECTED }"
+    echo -e "  ${RED}REJECTED${NC} - ${REASON}"
 
-elif echo "$SMTP_RESPONSE" | grep -q "blocked using"; then
-    echo -e "  ${RED}BLOCKED${NC} - Spamhaus DNSBL rejection"
-    echo "$SMTP_RESPONSE" | grep "blocked"
+    if echo "$REASON" | grep -qi "relay access denied"; then
+        echo -e "\n  Domain '${RCPT_DOMAIN}' is not in domains.conf"
+    elif echo "$REASON" | grep -qi "blocked using"; then
+        echo -e "\n  Sender blocked by Spamhaus DNSBL"
+    fi
 
-elif echo "$SMTP_RESPONSE" | grep -q "Service unavailable"; then
-    echo -e "  ${RED}BLOCKED${NC} - Service unavailable (RBL/DNSBL)"
+elif [[ "$SMTP_OUTPUT" == SENDER_REFUSED* ]]; then
+    REASON="${SMTP_OUTPUT#SENDER_REFUSED }"
+    echo -e "  ${RED}SENDER REFUSED${NC} - ${REASON}"
+
+elif [[ "$SMTP_OUTPUT" == DATA_ERROR* ]]; then
+    REASON="${SMTP_OUTPUT#DATA_ERROR }"
+    echo -e "  ${RED}DATA ERROR${NC} - ${REASON}"
+
+elif [[ "$SMTP_OUTPUT" == ERROR* ]]; then
+    REASON="${SMTP_OUTPUT#ERROR }"
+    echo -e "  ${RED}ERROR${NC} - ${REASON}"
 
 else
-    echo -e "  ${YELLOW}UNKNOWN${NC} - Review SMTP response above"
+    echo -e "  ${YELLOW}UNKNOWN${NC} - ${SMTP_OUTPUT}"
 fi
 
 echo ""
-
 echo -e "${BOLD}--- Queue Status ---${NC}"
 QUEUE=$(postqueue -p 2>/dev/null)
 if [[ "$QUEUE" == "Mail queue is empty" ]]; then
@@ -140,5 +161,4 @@ if [[ "$QUEUE" == "Mail queue is empty" ]]; then
 else
     echo "$QUEUE"
 fi
-
 echo ""
