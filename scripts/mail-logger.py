@@ -32,6 +32,7 @@ from collections import defaultdict
 
 LOG_FILE = "/var/log/mail.log"
 OUTPUT_DIR = "/var/log/spamhaus"
+GENERAL_LOG = "/var/log/spamhaus/general_activity.log"
 STATE_FILE = "/var/lib/mail-gateway/last_position"
 MAX_QUEUE_ENTRIES = 50000
 
@@ -44,19 +45,30 @@ def get_domain(email):
     return "unknown"
 
 
+def _append_csv(path, header, row):
+    file_exists = os.path.exists(path) and os.path.getsize(path) > 0
+    with open(path, "a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(header)
+        writer.writerow(row)
+
+
 def write_log_entry(domain, timestamp, sender, recipient, status, reason=""):
     domain = re.sub(r"[^a-zA-Z0-9._-]", "_", domain)
     domain_dir = os.path.join(OUTPUT_DIR, domain)
     os.makedirs(domain_dir, exist_ok=True)
 
-    log_file = os.path.join(domain_dir, "activity.log")
-    file_exists = os.path.exists(log_file) and os.path.getsize(log_file) > 0
-
-    with open(log_file, "a", newline="") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["timestamp", "sender", "recipient", "status", "reason"])
-        writer.writerow([timestamp, sender, recipient, status, reason])
+    _append_csv(
+        os.path.join(domain_dir, "activity.log"),
+        ["timestamp", "sender", "recipient", "status", "reason"],
+        [timestamp, sender, recipient, status, reason],
+    )
+    _append_csv(
+        GENERAL_LOG,
+        ["timestamp", "domain", "sender", "recipient", "status", "reason"],
+        [timestamp, domain, sender, recipient, status, reason],
+    )
 
 
 def clean_email(addr):

@@ -2,8 +2,10 @@
 # Postfix main.cf - Mail Gateway with Spamhaus DQS
 #
 # Placeholders replaced by install.sh:
-#   __DQS_KEY__   -> Spamhaus DQS key
-#   __HOSTNAME__  -> Gateway FQDN hostname
+#   __DQS_KEY__          -> Spamhaus DQS key
+#   __HOSTNAME__         -> Gateway FQDN hostname
+#   __RCPT_VERIFY__      -> reject_unverified_recipient (or removed)
+#   __RCPT_VERIFY_CONFIG__ -> address_verify_* settings (or removed)
 ###############################################################################
 
 # --- Identity ---
@@ -95,6 +97,7 @@ smtpd_recipient_restrictions =
     reject_unauth_destination,
     reject_non_fqdn_recipient,
     reject_unknown_recipient_domain,
+    __RCPT_VERIFY__
     __SPF_CHECK__
     reject_rhsbl_sender __DQS_KEY__.dbl.dq.spamhaus.net=127.0.1.[2..99],
     reject_rhsbl_helo __DQS_KEY__.dbl.dq.spamhaus.net=127.0.1.[2..99],
@@ -122,6 +125,9 @@ postscreen_access_list = permit_mynetworks
 postscreen_dnsbl_threshold = 1
 postscreen_dnsbl_action = enforce
 postscreen_greet_action = enforce
+
+# --- Recipient verification (if enabled) ---
+__RCPT_VERIFY_CONFIG__
 
 # --- SPF policy (if enabled) ---
 __SPF_TIMEOUT__

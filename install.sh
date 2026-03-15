@@ -57,6 +57,7 @@ DEFAULT_DQS_KEY=""
 DEFAULT_HOSTNAME=""
 DEFAULT_HBL="n"
 DEFAULT_SPF="n"
+DEFAULT_RCPT_VERIFY="n"
 DEFAULT_LETSENCRYPT="n"
 DEFAULT_LE_EMAIL=""
 
@@ -66,6 +67,7 @@ if [[ -f "$ENV_FILE" ]]; then
     DEFAULT_HOSTNAME="${HOSTNAME_GW:-}"
     DEFAULT_HBL="${HBL_ENABLED:-n}"
     DEFAULT_SPF="${SPF_ENABLED:-n}"
+    DEFAULT_RCPT_VERIFY="${RCPT_VERIFY_ENABLED:-n}"
     DEFAULT_LETSENCRYPT="${LETSENCRYPT_ENABLED:-n}"
     DEFAULT_LE_EMAIL="${LETSENCRYPT_EMAIL:-}"
     log_info "Previous configuration loaded from .env"
@@ -112,6 +114,11 @@ SPF_INPUT="${SPF_INPUT:-$DEFAULT_SPF}"
 SPF_ENABLED="n"
 [[ "${SPF_INPUT,,}" == "y" || "${SPF_INPUT,,}" == "yes" ]] && SPF_ENABLED="y"
 
+read -rp "  Enable recipient verification? Verify users exist on destination server (${DEFAULT_RCPT_VERIFY}): " RCPT_VERIFY_INPUT
+RCPT_VERIFY_INPUT="${RCPT_VERIFY_INPUT:-$DEFAULT_RCPT_VERIFY}"
+RCPT_VERIFY_ENABLED="n"
+[[ "${RCPT_VERIFY_INPUT,,}" == "y" || "${RCPT_VERIFY_INPUT,,}" == "yes" ]] && RCPT_VERIFY_ENABLED="y"
+
 read -rp "  Enable TLS with Let's Encrypt certificate? (${DEFAULT_LETSENCRYPT}): " LE_INPUT
 LE_INPUT="${LE_INPUT:-$DEFAULT_LETSENCRYPT}"
 LETSENCRYPT_ENABLED="n"
@@ -142,6 +149,7 @@ echo -e "  DQS key:    ${CYAN}${DQS_KEY:0:6}...${DQS_KEY: -4}${NC}"
 echo -e "  Hostname:   ${CYAN}${HOSTNAME_GW}${NC}"
 echo -e "  HBL:        ${CYAN}${HBL_ENABLED}${NC}"
 echo -e "  SPF check:  ${CYAN}${SPF_ENABLED}${NC}"
+echo -e "  Rcpt verify:${CYAN} ${RCPT_VERIFY_ENABLED}${NC}"
 if [[ "$LETSENCRYPT_ENABLED" == "y" ]]; then
     echo -e "  TLS:        ${CYAN}Let's Encrypt${NC}"
     echo -e "  LE email:   ${CYAN}${LETSENCRYPT_EMAIL}${NC}"
@@ -154,10 +162,28 @@ read -rp "  Proceed with installation? (y/n): " confirm
 
 # Save configuration for future runs
 cat > "$ENV_FILE" <<ENVEOF
+# Spamhaus DQS key (alphanumeric, min 10 chars)
 DQS_KEY="${DQS_KEY}"
+
+# Gateway fully qualified domain name
 HOSTNAME_GW="${HOSTNAME_GW}"
+
+# Hash Blocklist support (requires HBL-enabled DQS key)
 HBL_ENABLED="${HBL_ENABLED}"
+
+# Reject mail that fails SPF at SMTP level (y/n)
+# If disabled, SPF is still evaluated by SpamAssassin scoring.
 SPF_ENABLED="${SPF_ENABLED}"
+
+# Recipient verification: probe destination server to check if
+# the recipient exists before accepting mail (y/n)
+# Prevents backscatter for non-existent users.
+# Only enable if destination servers reject unknown recipients (550).
+# If destination is catch-all (accepts everything), leave disabled.
+RCPT_VERIFY_ENABLED="${RCPT_VERIFY_ENABLED}"
+
+# TLS certificate via Let's Encrypt (y/n)
+# Requires port 80 open. Falls back to self-signed if disabled.
 LETSENCRYPT_ENABLED="${LETSENCRYPT_ENABLED}"
 LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL}"
 ENVEOF
@@ -239,8 +265,9 @@ if [[ "$LETSENCRYPT_ENABLED" == "y" ]]; then
     LE_CERT="/etc/letsencrypt/live/${HOSTNAME_GW}/fullchain.pem"
     LE_KEY="/etc/letsencrypt/live/${HOSTNAME_GW}/privkey.pem"
 
-    if [[ -f "$LE_CERT" && -f "$LE_KEY" ]]; then
-        log_info "Certificate already exists at ${LE_CERT}"
+    if [[ -f "$LE_CERT" && -f "$LE_KEY" ]] && openssl x509 -checkend 86400 -noout -in "$LE_CERT" 2>/dev/null; then
+        CERT_EXPIRY=$(openssl x509 -enddate -noout -in "$LE_CERT" 2>/dev/null | cut -d= -f2)
+        log_info "Valid certificate found (expires: ${CERT_EXPIRY})"
         log_info "Skipping request. To force renewal: certbot renew --force-renewal"
         USE_LETSENCRYPT_CERT="y"
     else
@@ -320,6 +347,25 @@ else
     sed -i '/__SPF_CHECK__/d' /etc/postfix/main.cf
     sed -i '/__SPF_TIMEOUT__/d' /etc/postfix/main.cf
     log_info "SPF check: disabled (handled by SpamAssassin scoring only)"
+fi
+
+if [[ "$RCPT_VERIFY_ENABLED" == "y" ]]; then
+    sed -i 's/__RCPT_VERIFY__/reject_unverified_recipient,/' /etc/postfix/main.cf
+    sed -i '/__RCPT_VERIFY_CONFIG__/{
+        r /dev/stdin
+        d
+    }' /etc/postfix/main.cf <<'RCPTEOF'
+address_verify_map = btree:/var/lib/postfix/verify
+unverified_recipient_reject_code = 550
+address_verify_positive_expire_time = 7d
+address_verify_negative_expire_time = 3d
+address_verify_negative_refresh_time = 3h
+RCPTEOF
+    log_info "Recipient verification: ENABLED (probe destination server)"
+else
+    sed -i '/__RCPT_VERIFY__/d' /etc/postfix/main.cf
+    sed -i '/__RCPT_VERIFY_CONFIG__/d' /etc/postfix/main.cf
+    log_info "Recipient verification: disabled"
 fi
 
 postmap hash:/etc/postfix/dnsbl-reply-map
@@ -599,6 +645,7 @@ echo -e "  Gateway hostname:  ${CYAN}${HOSTNAME_GW}${NC}"
 echo -e "  DQS key:           ${CYAN}${DQS_KEY:0:6}...${DQS_KEY: -4}${NC}"
 echo -e "  HBL enabled:       ${CYAN}${HBL_ENABLED}${NC}"
 echo -e "  SPF check:         ${CYAN}${SPF_ENABLED}${NC}"
+echo -e "  Rcpt verify:       ${CYAN}${RCPT_VERIFY_ENABLED}${NC}"
 if [[ "$USE_LETSENCRYPT_CERT" == "y" ]]; then
     echo -e "  TLS certificate:   ${CYAN}Let's Encrypt (/etc/letsencrypt/live/${HOSTNAME_GW}/)${NC}"
 else

@@ -57,6 +57,10 @@ INSTALLATION
      - Whether to enable SPF checking (y/n)
        If enabled, mail that fails SPF is rejected at SMTP level.
        If disabled, SPF is still evaluated by SpamAssassin scoring.
+     - Whether to enable recipient verification (y/n)
+       If enabled, the gateway probes destination servers to verify
+       recipients exist before accepting mail. Prevents backscatter.
+       Only enable if destination servers reject unknown users.
      - Whether to enable TLS with Let's Encrypt (y/n)
        If enabled, certbot requests a certificate for the gateway
        hostname. Requires port 80 open. If disabled or if the
@@ -176,8 +180,14 @@ LOGS
     ls /var/log/spamhaus/
     cat /var/log/spamhaus/example.com/activity.log
 
-  CSV format:
+  Consolidated log (all domains in a single file):
+    cat /var/log/spamhaus/general_activity.log
+
+  CSV format (per-domain):
     timestamp,sender,recipient,status,reason
+
+  CSV format (consolidated, adds domain column):
+    timestamp,domain,sender,recipient,status,reason
 
   Statuses:
     relay  - Mail accepted and delivered to destination server
@@ -226,6 +236,52 @@ may not trust the certificate. Re-run the installer to switch to
 Let's Encrypt at any time.
 
 
+RECIPIENT VERIFICATION
+----------------------
+The installer can optionally enable recipient verification. When
+enabled, the gateway probes the destination SMTP server with a
+RCPT TO command before accepting mail. If the destination rejects
+the recipient (550 User unknown), the gateway immediately rejects
+the original message. This prevents backscatter: without it, the
+gateway accepts mail for non-existent users, tries to deliver it,
+gets a bounce from the destination, and generates a bounce message
+to the (likely forged) sender address.
+
+Prerequisite:
+  The destination server must reject unknown recipients at the SMTP
+  RCPT TO stage (respond 550). If the destination is configured as
+  a catch-all (accepts all addresses), verification provides no
+  benefit and should be left disabled.
+
+  Test your destination server before enabling:
+    telnet destination-server 25
+    EHLO test
+    MAIL FROM:<test@test.com>
+    RCPT TO:<nonexistent-user-xyz@yourdomain.com>
+    (must respond 550 - if it responds 250, do not enable)
+
+How it works:
+  1. Mail arrives at gateway for user@yourdomain.com
+  2. Gateway opens a separate SMTP connection to the destination
+  3. Sends RCPT TO:<user@yourdomain.com> to check if user exists
+  4. If destination responds 250: accept the original mail
+  5. If destination responds 550: reject the original mail
+  6. Result is cached to avoid repeated probes
+
+Cache settings (configured in main.cf when enabled):
+  address_verify_positive_expire_time = 7d   (valid user cached 7 days)
+  address_verify_negative_expire_time = 3d   (invalid user cached 3 days)
+  address_verify_negative_refresh_time = 3h  (retry invalid after 3 hours)
+
+  If you add or remove mailboxes on the destination server, the cache
+  may hold stale results for up to these durations. To flush the cache:
+    postmap -d user@domain btree:/var/lib/postfix/verify
+
+Note: the first message to a new recipient adds a small delay (2-10s)
+while the gateway probes the destination. Subsequent messages for the
+same recipient use the cache with no added latency.
+
+
 TESTING
 -------
   Interactive test (prompts for sender and recipient, sends via localhost):
@@ -255,6 +311,12 @@ VERIFICATION
     EHLO test
     MAIL FROM:<test@test.com>
     RCPT TO:<user@unconfigured-domain.com>
+
+  Verify recipient verification (if enabled, must respond "Recipient address rejected"):
+    telnet localhost 25
+    EHLO test
+    MAIL FROM:<test@test.com>
+    RCPT TO:<nonexistent-user-xyz@configured-domain.com>
 
   Test Spamhaus integration:
     Go to http://blt.spamhaus.com and send a test email
