@@ -12,8 +12,8 @@ Designed for use as a front-line mail gateway that sits between the internet
 and your internal mail servers, providing enterprise-grade spam filtering
 with Spamhaus real-time data.
 
-Author: Gilberto Dewey (https://github.com/gdewey)
-Built with the assistance of Claude (Anthropic)
+Author: Guillermo Dewey (https://ofik.com)
+
 
 
 REQUIREMENTS
