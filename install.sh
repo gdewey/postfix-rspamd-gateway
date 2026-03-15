@@ -58,6 +58,7 @@ DEFAULT_HOSTNAME=""
 DEFAULT_HBL="n"
 DEFAULT_SPF="n"
 DEFAULT_RCPT_VERIFY="n"
+DEFAULT_SRS="n"
 DEFAULT_LETSENCRYPT="n"
 DEFAULT_LE_EMAIL=""
 
@@ -68,6 +69,7 @@ if [[ -f "$ENV_FILE" ]]; then
     DEFAULT_HBL="${HBL_ENABLED:-n}"
     DEFAULT_SPF="${SPF_ENABLED:-n}"
     DEFAULT_RCPT_VERIFY="${RCPT_VERIFY_ENABLED:-n}"
+    DEFAULT_SRS="${SRS_ENABLED:-n}"
     DEFAULT_LETSENCRYPT="${LETSENCRYPT_ENABLED:-n}"
     DEFAULT_LE_EMAIL="${LETSENCRYPT_EMAIL:-}"
     log_info "Previous configuration loaded from .env"
@@ -119,6 +121,11 @@ RCPT_VERIFY_INPUT="${RCPT_VERIFY_INPUT:-$DEFAULT_RCPT_VERIFY}"
 RCPT_VERIFY_ENABLED="n"
 [[ "${RCPT_VERIFY_INPUT,,}" == "y" || "${RCPT_VERIFY_INPUT,,}" == "yes" ]] && RCPT_VERIFY_ENABLED="y"
 
+read -rp "  Enable SRS? Rewrite envelope sender for SPF compliance at destination (${DEFAULT_SRS}): " SRS_INPUT
+SRS_INPUT="${SRS_INPUT:-$DEFAULT_SRS}"
+SRS_ENABLED="n"
+[[ "${SRS_INPUT,,}" == "y" || "${SRS_INPUT,,}" == "yes" ]] && SRS_ENABLED="y"
+
 read -rp "  Enable TLS with Let's Encrypt certificate? (${DEFAULT_LETSENCRYPT}): " LE_INPUT
 LE_INPUT="${LE_INPUT:-$DEFAULT_LETSENCRYPT}"
 LETSENCRYPT_ENABLED="n"
@@ -150,6 +157,7 @@ echo -e "  Hostname:   ${CYAN}${HOSTNAME_GW}${NC}"
 echo -e "  HBL:        ${CYAN}${HBL_ENABLED}${NC}"
 echo -e "  SPF check:  ${CYAN}${SPF_ENABLED}${NC}"
 echo -e "  Rcpt verify:${CYAN} ${RCPT_VERIFY_ENABLED}${NC}"
+echo -e "  SRS:        ${CYAN}${SRS_ENABLED}${NC}"
 if [[ "$LETSENCRYPT_ENABLED" == "y" ]]; then
     echo -e "  TLS:        ${CYAN}Let's Encrypt${NC}"
     echo -e "  LE email:   ${CYAN}${LETSENCRYPT_EMAIL}${NC}"
@@ -182,6 +190,11 @@ SPF_ENABLED="${SPF_ENABLED}"
 # If destination is catch-all (accepts everything), leave disabled.
 RCPT_VERIFY_ENABLED="${RCPT_VERIFY_ENABLED}"
 
+# SRS (Sender Rewriting Scheme) via postsrsd (y/n)
+# Rewrites envelope sender so relayed mail passes SPF at destination.
+# Requires an SPF record for the gateway hostname (v=spf1 a -all).
+SRS_ENABLED="${SRS_ENABLED}"
+
 # TLS certificate via Let's Encrypt (y/n)
 # Requires port 80 open. Falls back to self-signed if disabled.
 LETSENCRYPT_ENABLED="${LETSENCRYPT_ENABLED}"
@@ -191,14 +204,15 @@ chmod 600 "$ENV_FILE"
 log_info "Configuration saved to .env"
 
 TOTAL_STEPS=7
-[[ "$LETSENCRYPT_ENABLED" == "y" ]] && TOTAL_STEPS=8
+[[ "$SRS_ENABLED" == "y" ]] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
+[[ "$LETSENCRYPT_ENABLED" == "y" ]] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
 STEP=0
 
 # ---------------------------------------------------------------------------
 # Stop existing services before installing (avoids dpkg conflicts)
 # ---------------------------------------------------------------------------
 RUNNING_SERVICES=""
-for svc in mail-logger spamass-milter spamd spamassassin postfix; do
+for svc in mail-logger postsrsd spamass-milter spamd spamassassin postfix; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         RUNNING_SERVICES="${RUNNING_SERVICES} ${svc}"
     fi
@@ -245,6 +259,9 @@ apt-get update -qq || { log_error "apt-get update failed"; exit 1; }
 PACKAGES=(postfix spamassassin spamc spamass-milter libmail-spf-perl libmail-dkim-perl git ssl-cert)
 if [[ "$SPF_ENABLED" == "y" ]]; then
     PACKAGES+=(postfix-policyd-spf-python)
+fi
+if [[ "$SRS_ENABLED" == "y" ]]; then
+    PACKAGES+=(postsrsd)
 fi
 if [[ "$LETSENCRYPT_ENABLED" == "y" ]]; then
     PACKAGES+=(certbot)
@@ -366,6 +383,33 @@ else
     sed -i '/__RCPT_VERIFY__/d' /etc/postfix/main.cf
     sed -i '/__RCPT_VERIFY_CONFIG__/d' /etc/postfix/main.cf
     log_info "Recipient verification: disabled"
+fi
+
+if [[ "$SRS_ENABLED" == "y" ]]; then
+    sed -i '/__SRS_CONFIG__/{
+        r /dev/stdin
+        d
+    }' /etc/postfix/main.cf <<'SRSEOF'
+sender_canonical_maps = tcp:localhost:10001
+sender_canonical_classes = envelope_sender
+recipient_canonical_maps = tcp:localhost:10002
+recipient_canonical_classes = envelope_recipient,bounce_recipient
+SRSEOF
+    sed -i 's/__SRS_RELAY_HOSTNAME__/$myhostname/' /etc/postfix/main.cf
+
+    cat > /etc/default/postsrsd <<POSTSRSDEOF
+SRS_DOMAIN=${HOSTNAME_GW}
+SRS_EXCLUDE_DOMAINS=${HOSTNAME_GW}
+SRS_SECRET=/etc/postsrsd.secret
+SRS_SEPARATOR==
+SRS_FORWARD_PORT=10001
+SRS_REVERSE_PORT=10002
+POSTSRSDEOF
+    log_info "SRS: ENABLED (postsrsd rewriting envelope senders)"
+else
+    sed -i '/__SRS_CONFIG__/d' /etc/postfix/main.cf
+    sed -i 's/ __SRS_RELAY_HOSTNAME__//' /etc/postfix/main.cf
+    log_info "SRS: disabled"
 fi
 
 postmap hash:/etc/postfix/dnsbl-reply-map
@@ -537,8 +581,11 @@ else
     SA_SERVICE="spamassassin"
 fi
 
+SVC_LIST="$SA_SERVICE spamass-milter postfix mail-logger"
+[[ "$SRS_ENABLED" == "y" ]] && SVC_LIST="postsrsd ${SVC_LIST}"
+
 START_ERRORS=0
-for svc in $SA_SERVICE spamass-milter postfix mail-logger; do
+for svc in $SVC_LIST; do
     systemctl enable "$svc" --quiet 2>/dev/null || true
     if systemctl restart "$svc" 2>/dev/null; then
         log_info "${svc} started."
@@ -570,7 +617,10 @@ echo ""
 
 ERRORS=0
 
-for svc in postfix $SA_SERVICE spamass-milter mail-logger; do
+VERIFY_SVC_LIST="postfix $SA_SERVICE spamass-milter mail-logger"
+[[ "$SRS_ENABLED" == "y" ]] && VERIFY_SVC_LIST="${VERIFY_SVC_LIST} postsrsd"
+
+for svc in $VERIFY_SVC_LIST; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         echo -e "  ${GREEN}OK${NC}  ${svc} is running"
     else
@@ -646,6 +696,7 @@ echo -e "  DQS key:           ${CYAN}${DQS_KEY:0:6}...${DQS_KEY: -4}${NC}"
 echo -e "  HBL enabled:       ${CYAN}${HBL_ENABLED}${NC}"
 echo -e "  SPF check:         ${CYAN}${SPF_ENABLED}${NC}"
 echo -e "  Rcpt verify:       ${CYAN}${RCPT_VERIFY_ENABLED}${NC}"
+echo -e "  SRS:               ${CYAN}${SRS_ENABLED}${NC}"
 if [[ "$USE_LETSENCRYPT_CERT" == "y" ]]; then
     echo -e "  TLS certificate:   ${CYAN}Let's Encrypt (/etc/letsencrypt/live/${HOSTNAME_GW}/)${NC}"
 else
@@ -668,5 +719,13 @@ echo "  Browse domain logs:   ls /var/log/spamhaus/"
 if [[ "$USE_LETSENCRYPT_CERT" == "y" ]]; then
     echo "  Renew TLS cert:      certbot renew"
     echo "  Cert status:         certbot certificates"
+fi
+if [[ "$SRS_ENABLED" == "y" ]]; then
+    echo ""
+    echo -e "${BOLD}SRS DNS requirement:${NC}"
+    echo "  Ensure the gateway hostname has an SPF record:"
+    echo "    ${HOSTNAME_GW}.  IN TXT  \"v=spf1 a -all\""
+    echo "  Without this, destination servers cannot validate SPF for"
+    echo "  SRS-rewritten addresses and the rewriting provides no benefit."
 fi
 echo ""

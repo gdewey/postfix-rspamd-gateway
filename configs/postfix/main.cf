@@ -6,6 +6,8 @@
 #   __HOSTNAME__         -> Gateway FQDN hostname
 #   __RCPT_VERIFY__      -> reject_unverified_recipient (or removed)
 #   __RCPT_VERIFY_CONFIG__ -> address_verify_* settings (or removed)
+#   __SRS_CONFIG__       -> SRS canonical maps (or removed)
+#   __SRS_RELAY_HOSTNAME__ -> $myhostname added to relay_domains (or removed)
 ###############################################################################
 
 # --- Identity ---
@@ -27,7 +29,7 @@ local_transport = error:no local mail delivery
 mynetworks = 127.0.0.0/8 [::1]/128
 
 # --- Relay and transport routing ---
-relay_domains = hash:/etc/postfix/relay_domains
+relay_domains = hash:/etc/postfix/relay_domains __SRS_RELAY_HOSTNAME__
 transport_maps = hash:/etc/postfix/transport
 relay_recipient_maps =
 
@@ -131,6 +133,9 @@ __RCPT_VERIFY_CONFIG__
 
 # --- SPF policy (if enabled) ---
 __SPF_TIMEOUT__
+
+# --- SRS (Sender Rewriting Scheme, if enabled) ---
+__SRS_CONFIG__
 
 # --- SpamAssassin milter ---
 smtpd_milters = unix:spamass/spamass.sock

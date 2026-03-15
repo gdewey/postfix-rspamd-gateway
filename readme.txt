@@ -8,6 +8,13 @@ SpamAssassin content analysis, HBL hash-based blocklists, and dangerous
 attachment blocking), then relays clean mail to destination SMTP servers
 based on per-domain routing rules.
 
+Optionally enables SRS (Sender Rewriting Scheme) via postsrsd so that
+relayed mail passes SPF validation at destination servers. Without SRS,
+destination servers see the gateway IP as the sender but the original
+sender's SPF record does not include it, causing SPF failures. SRS
+rewrites the envelope sender to the gateway's own domain, which has a
+valid SPF record, solving this problem transparently.
+
 Optionally enables TLS encryption with a Let's Encrypt certificate
 (via certbot) so the gateway uses trusted STARTTLS for server-to-server
 communication, with automatic certificate renewal.
@@ -67,6 +74,9 @@ DNS requirements (configure BEFORE installing):
 - PTR record: server IP -> gateway.yourdomain.com
   (PTR is configured in your VPS/hosting provider panel)
 - Both must point to the same hostname (FCrDNS)
+- SPF record: gateway.yourdomain.com -> "v=spf1 a -all"
+  (required when SRS is enabled, so destination servers pass SPF checks
+  for rewritten envelope senders)
 
 
 INSTALLATION
@@ -95,6 +105,10 @@ INSTALLATION
        If enabled, the gateway probes destination servers to verify
        recipients exist before accepting mail. Prevents backscatter.
        Only enable if destination servers reject unknown users.
+     - Whether to enable SRS (y/n)
+       If enabled, rewrites envelope senders so that relayed mail
+       passes SPF validation at destination servers. Uses postsrsd.
+       Requires an SPF record for the gateway hostname.
      - Whether to enable TLS with Let's Encrypt (y/n)
        If enabled, certbot requests a certificate for the gateway
        hostname. Requires port 80 open. If disabled or if the
@@ -114,12 +128,16 @@ to work properly with this gateway:
    to reject connections on port 25 from any IP other than the gateway.
    This ensures all incoming mail is filtered before delivery.
 
-2. Disable SPF checking on the destination server: since the gateway
-   relays mail on behalf of external senders, the destination server
-   will see the gateway IP as the sender, not the original server.
-   SPF checks on the destination will fail because the gateway IP is
-   not in the sender's SPF record. The gateway already handles SPF
-   validation (if enabled), so the destination server does not need it.
+2. SPF on the destination server:
+   - With SRS enabled (recommended): the gateway rewrites the envelope
+     sender to its own domain before relaying. The destination server
+     checks SPF against the gateway hostname, which passes. No need to
+     disable SPF on the destination server.
+   - Without SRS: the destination server will see the gateway IP as
+     the sender, but the original sender's SPF record does not include
+     it. SPF checks will fail. In this case, disable SPF checking on
+     the destination server. The gateway already handles SPF validation
+     (if enabled), so the destination does not need it.
 
 3. Point MX records to the gateway: the MX record for each domain in
    domains.conf should point to the gateway hostname, not the
@@ -150,7 +168,7 @@ No service restart required.
 
 SERVICES
 --------
-The gateway runs 4 independent services (5 if Let's Encrypt is enabled):
+The gateway runs 4 core services plus optional ones depending on config:
 
   +-------------------+----------------------------------------------+
   | Service           | Purpose                                      |
@@ -159,11 +177,13 @@ The gateway runs 4 independent services (5 if Let's Encrypt is enabled):
   | spamd             | SpamAssassin daemon - content filtering       |
   | spamass-milter    | Connects Postfix to SpamAssassin             |
   | mail-logger       | Real-time log parser, per-domain CSV output  |
-  | certbot.timer *   | Auto-renews Let's Encrypt TLS certificate    |
+  | postsrsd *        | SRS envelope sender rewriting (SPF fix)      |
+  | certbot.timer **  | Auto-renews Let's Encrypt TLS certificate    |
   +-------------------+----------------------------------------------+
 
-  * certbot.timer is only present when Let's Encrypt TLS is enabled.
-    It runs "certbot renew" twice daily and reloads Postfix on renewal.
+  *  postsrsd is only present when SRS is enabled.
+  ** certbot.timer is only present when Let's Encrypt TLS is enabled.
+     It runs "certbot renew" twice daily and reloads Postfix on renewal.
 
   Note: on Ubuntu 24.04 the SpamAssassin service is called "spamd".
   On older versions it may be called "spamassassin". The installer
@@ -194,10 +214,11 @@ Service commands:
     sudo systemctl status spamd
     sudo systemctl status spamass-milter
     sudo systemctl status mail-logger
+    sudo systemctl status postsrsd         (if SRS enabled)
     sudo systemctl status certbot.timer    (if Let's Encrypt enabled)
 
   Quick status for all:
-    for s in postfix spamd spamass-milter mail-logger; do
+    for s in postfix spamd spamass-milter mail-logger postsrsd; do
       printf "%-20s %s\n" "$s" "$(systemctl is-active $s)"
     done
 
@@ -316,6 +337,58 @@ while the gateway probes the destination. Subsequent messages for the
 same recipient use the cache with no added latency.
 
 
+SRS (SENDER REWRITING SCHEME)
+-----------------------------
+The installer can optionally enable SRS via postsrsd. When enabled,
+the gateway rewrites the envelope sender (MAIL FROM) of all relayed
+messages to use the gateway's own domain, so that destination servers
+pass SPF validation.
+
+Why it is needed:
+  When the gateway relays mail from user@external.com to your backend
+  server, the destination sees the gateway's IP as the sending server.
+  But external.com's SPF record does not include the gateway IP, so
+  SPF fails. Depending on the destination's policy, the message may
+  be rejected, quarantined, or marked as suspicious.
+
+How it works:
+  1. Mail arrives from user@external.com
+  2. postsrsd rewrites the envelope sender to:
+     SRS0=hash=TT=external.com=user@gateway.yourdomain.com
+  3. Mail is relayed to the destination server
+  4. Destination checks SPF for gateway.yourdomain.com -> PASS
+  5. If the destination generates a bounce, it goes to the SRS address
+  6. The gateway receives the bounce, postsrsd reverses the SRS address
+     back to user@external.com, and forwards the bounce
+
+Advantages:
+  - SPF passes at destination: no more rejections or spam-flagging
+    due to SPF failures on relayed mail.
+  - No changes needed on destination servers: they can keep their
+    normal SPF checking enabled.
+  - Transparent to end users: the rewriting only affects the envelope
+    sender (MAIL FROM), not the visible From: header.
+  - Bounce handling preserved: SRS encodes the original sender so
+    that bounces are correctly routed back to the original address.
+  - Cryptographic protection: SRS addresses include a keyed hash and
+    timestamp, preventing forgery and replay attacks.
+  - Standard protocol: SRS is an established scheme used by major
+    mail providers for forwarding scenarios.
+
+DNS requirement:
+  The gateway hostname MUST have an SPF record that includes its own IP:
+    gateway.yourdomain.com.  IN TXT  "v=spf1 a -all"
+
+  Without this record, SRS provides no benefit -- destination servers
+  would still fail SPF because there is no SPF policy to pass against.
+
+Configuration:
+  postsrsd stores its secret key in /etc/postsrsd.secret (auto-generated
+  during package installation). Configuration is in /etc/default/postsrsd.
+  Postfix connects to postsrsd via tcp:localhost:10001 (forward rewriting)
+  and tcp:localhost:10002 (reverse rewriting for bounces).
+
+
 TESTING
 -------
   Interactive test (prompts for sender and recipient, sends via localhost):
@@ -381,6 +454,8 @@ FILE STRUCTURE
   Files deployed on the server:
   /etc/postfix/                   Postfix config (with DQS key applied)
   /etc/spamassassin/              SA config + Spamhaus DQS plugin
+  /etc/default/postsrsd           postsrsd config (if SRS enabled)
+  /etc/postsrsd.secret            SRS secret key (if SRS enabled)
   /etc/letsencrypt/               TLS certificates (if Let's Encrypt enabled)
   /opt/mail-gateway/scripts/      Mail logger
   /var/log/spamhaus/              Per-domain logs (activity.log)
