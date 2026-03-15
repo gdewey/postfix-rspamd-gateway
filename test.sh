@@ -49,23 +49,18 @@ if [[ ${#CONFIGURED_DOMAINS[@]} -gt 0 ]]; then
     for d in "${CONFIGURED_DOMAINS[@]}"; do
         echo -e "    ${CYAN}${d}${NC}"
     done
-    DEFAULT_RCPT="test@${CONFIGURED_DOMAINS[0]}"
 else
     echo -e "  ${YELLOW}No domains configured in domains.conf${NC}"
-    DEFAULT_RCPT=""
 fi
 
 echo ""
-read -rp "  Sender email (test@gmail.com): " SENDER
-SENDER="${SENDER:-test@gmail.com}"
-
-if [[ -n "$DEFAULT_RCPT" ]]; then
-    read -rp "  Recipient email (${DEFAULT_RCPT}): " RECIPIENT
-    RECIPIENT="${RECIPIENT:-$DEFAULT_RCPT}"
-else
-    read -rp "  Recipient email: " RECIPIENT
+read -rp "  Sender email: " SENDER
+if [[ -z "$SENDER" ]]; then
+    echo -e "${RED}Sender cannot be empty.${NC}"
+    exit 1
 fi
 
+read -rp "  Recipient email: " RECIPIENT
 if [[ -z "$RECIPIENT" ]]; then
     echo -e "${RED}Recipient cannot be empty.${NC}"
     exit 1
