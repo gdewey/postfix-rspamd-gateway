@@ -49,10 +49,35 @@ INSTALLATION
      - Spamhaus DQS key
      - Gateway hostname (FQDN)
      - Whether the key has HBL enabled (y/n)
+     - Whether to enable SPF checking (y/n)
+       If enabled, mail that fails SPF is rejected at SMTP level.
+       If disabled, SPF is still evaluated by SpamAssassin scoring.
 
    Answers are saved to .env for future runs. When re-running the
    installer, previous values appear as defaults and can be accepted
    by pressing Enter.
+
+
+DESTINATION SERVER CONFIGURATION
+--------------------------------
+The destination SMTP servers (configured in domains.conf) should be set up
+to work properly with this gateway:
+
+1. Only accept mail from the gateway IP: configure your destination server
+   to reject connections on port 25 from any IP other than the gateway.
+   This ensures all incoming mail is filtered before delivery.
+
+2. Disable SPF checking on the destination server: since the gateway
+   relays mail on behalf of external senders, the destination server
+   will see the gateway IP as the sender, not the original server.
+   SPF checks on the destination will fail because the gateway IP is
+   not in the sender's SPF record. The gateway already handles SPF
+   validation (if enabled), so the destination server does not need it.
+
+3. Point MX records to the gateway: the MX record for each domain in
+   domains.conf should point to the gateway hostname, not the
+   destination server. This routes all incoming mail through the
+   gateway for filtering before delivery.
 
 
 RE-INSTALL / UPDATE

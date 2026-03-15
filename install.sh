@@ -58,12 +58,14 @@ ENV_FILE="${SCRIPT_DIR}/.env"
 DEFAULT_DQS_KEY=""
 DEFAULT_HOSTNAME=""
 DEFAULT_HBL="n"
+DEFAULT_SPF="n"
 
 if [[ -f "$ENV_FILE" ]]; then
     source "$ENV_FILE"
     DEFAULT_DQS_KEY="${DQS_KEY:-}"
     DEFAULT_HOSTNAME="${HOSTNAME_GW:-}"
     DEFAULT_HBL="${HBL_ENABLED:-n}"
+    DEFAULT_SPF="${SPF_ENABLED:-n}"
     log_info "Previous configuration loaded from .env"
     echo ""
 fi
@@ -103,10 +105,16 @@ HBL_INPUT="${HBL_INPUT:-$DEFAULT_HBL}"
 HBL_ENABLED="n"
 [[ "${HBL_INPUT,,}" == "y" || "${HBL_INPUT,,}" == "yes" ]] && HBL_ENABLED="y"
 
+read -rp "  Enable SPF check? Reject mail that fails SPF (${DEFAULT_SPF}): " SPF_INPUT
+SPF_INPUT="${SPF_INPUT:-$DEFAULT_SPF}"
+SPF_ENABLED="n"
+[[ "${SPF_INPUT,,}" == "y" || "${SPF_INPUT,,}" == "yes" ]] && SPF_ENABLED="y"
+
 echo ""
 echo -e "  DQS key:    ${CYAN}${DQS_KEY:0:6}...${DQS_KEY: -4}${NC}"
 echo -e "  Hostname:   ${CYAN}${HOSTNAME_GW}${NC}"
 echo -e "  HBL:        ${CYAN}${HBL_ENABLED}${NC}"
+echo -e "  SPF check:  ${CYAN}${SPF_ENABLED}${NC}"
 echo ""
 read -rp "  Proceed with installation? (y/n): " confirm
 [[ "${confirm,,}" != "y" ]] && { echo "Aborted."; exit 0; }
@@ -116,6 +124,7 @@ cat > "$ENV_FILE" <<ENVEOF
 DQS_KEY="${DQS_KEY}"
 HOSTNAME_GW="${HOSTNAME_GW}"
 HBL_ENABLED="${HBL_ENABLED}"
+SPF_ENABLED="${SPF_ENABLED}"
 ENVEOF
 chmod 600 "$ENV_FILE"
 log_info "Configuration saved to .env"
@@ -167,15 +176,11 @@ debconf-set-selections <<< "postfix postfix/mailname string ${HOSTNAME_GW}"
 debconf-set-selections <<< "postfix postfix/main_mailer_type string Internet Site"
 
 apt-get update -qq || { log_error "apt-get update failed"; exit 1; }
-apt-get install -y \
-    postfix \
-    spamassassin \
-    spamc \
-    spamass-milter \
-    libmail-spf-perl \
-    libmail-dkim-perl \
-    git \
-    ssl-cert \
+PACKAGES=(postfix spamassassin spamc spamass-milter libmail-spf-perl libmail-dkim-perl git ssl-cert)
+if [[ "$SPF_ENABLED" == "y" ]]; then
+    PACKAGES+=(postfix-policyd-spf-python)
+fi
+apt-get install -y "${PACKAGES[@]}" \
     || { log_error "apt-get install failed"; exit 1; }
 
 log_info "Packages installed."
@@ -195,6 +200,25 @@ sed -i "s/__DQS_KEY__/${DQS_KEY}/g"    /etc/postfix/main.cf
 sed -i "s/__HOSTNAME__/${HOSTNAME_GW}/g" /etc/postfix/main.cf
 sed -i "s/__DQS_KEY__/${DQS_KEY}/g"    /etc/postfix/dnsbl-reply-map
 sed -i "s/__DQS_KEY__/${DQS_KEY}/g"    /etc/postfix/dnsbl_reply
+
+if [[ "$SPF_ENABLED" == "y" ]]; then
+    sed -i 's/__SPF_CHECK__/check_policy_service unix:private\/policyd-spf,/' /etc/postfix/main.cf
+    sed -i 's/__SPF_TIMEOUT__/policyd-spf_time_limit = 3600/' /etc/postfix/main.cf
+
+    if ! grep -q "policyd-spf" /etc/postfix/master.cf; then
+        cat >> /etc/postfix/master.cf <<'SPFEOF'
+
+# --- SPF policy check ---
+policyd-spf  unix  -       n       n       -       0       spawn
+        user=policyd-spf argv=/usr/bin/policyd-spf
+SPFEOF
+    fi
+    log_info "SPF check: ENABLED (reject on fail)"
+else
+    sed -i '/__SPF_CHECK__/d' /etc/postfix/main.cf
+    sed -i '/__SPF_TIMEOUT__/d' /etc/postfix/main.cf
+    log_info "SPF check: disabled (handled by SpamAssassin scoring only)"
+fi
 
 postmap hash:/etc/postfix/dnsbl-reply-map
 
@@ -445,6 +469,7 @@ echo ""
 echo -e "  Gateway hostname:  ${CYAN}${HOSTNAME_GW}${NC}"
 echo -e "  DQS key:           ${CYAN}${DQS_KEY:0:6}...${DQS_KEY: -4}${NC}"
 echo -e "  HBL enabled:       ${CYAN}${HBL_ENABLED}${NC}"
+echo -e "  SPF check:         ${CYAN}${SPF_ENABLED}${NC}"
 echo -e "  Relay domains:     ${CYAN}${DOMAIN_COUNT}${NC}"
 echo -e "  Logs:              ${CYAN}/var/log/spamhaus/<domain>/activity.log${NC}"
 echo ""
