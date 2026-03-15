@@ -41,8 +41,6 @@ if ! grep -qi 'ubuntu' /etc/os-release 2>/dev/null; then
     [[ "${cont,,}" != "y" ]] && exit 1
 fi
 
-TOTAL_STEPS=7
-
 echo ""
 echo -e "${BOLD}========================================${NC}"
 echo -e "${BOLD} Postfix + SpamAssassin Mail Gateway${NC}"
@@ -59,6 +57,8 @@ DEFAULT_DQS_KEY=""
 DEFAULT_HOSTNAME=""
 DEFAULT_HBL="n"
 DEFAULT_SPF="n"
+DEFAULT_LETSENCRYPT="n"
+DEFAULT_LE_EMAIL=""
 
 if [[ -f "$ENV_FILE" ]]; then
     source "$ENV_FILE"
@@ -66,6 +66,8 @@ if [[ -f "$ENV_FILE" ]]; then
     DEFAULT_HOSTNAME="${HOSTNAME_GW:-}"
     DEFAULT_HBL="${HBL_ENABLED:-n}"
     DEFAULT_SPF="${SPF_ENABLED:-n}"
+    DEFAULT_LETSENCRYPT="${LETSENCRYPT_ENABLED:-n}"
+    DEFAULT_LE_EMAIL="${LETSENCRYPT_EMAIL:-}"
     log_info "Previous configuration loaded from .env"
     echo ""
 fi
@@ -110,11 +112,42 @@ SPF_INPUT="${SPF_INPUT:-$DEFAULT_SPF}"
 SPF_ENABLED="n"
 [[ "${SPF_INPUT,,}" == "y" || "${SPF_INPUT,,}" == "yes" ]] && SPF_ENABLED="y"
 
+read -rp "  Enable TLS with Let's Encrypt certificate? (${DEFAULT_LETSENCRYPT}): " LE_INPUT
+LE_INPUT="${LE_INPUT:-$DEFAULT_LETSENCRYPT}"
+LETSENCRYPT_ENABLED="n"
+LETSENCRYPT_EMAIL=""
+if [[ "${LE_INPUT,,}" == "y" || "${LE_INPUT,,}" == "yes" ]]; then
+    LETSENCRYPT_ENABLED="y"
+    echo ""
+    echo -e "  ${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${YELLOW}NOTE:${NC} Let's Encrypt requires ${BOLD}port 80${NC} to be open and"
+    echo -e "  reachable from the internet for the HTTP-01 challenge."
+    echo -e "  Make sure your firewall allows inbound TCP port 80."
+    echo -e "  ${YELLOW}────────────────────────────────────────────────────────────${NC}"
+    echo ""
+    if [[ -n "$DEFAULT_LE_EMAIL" ]]; then
+        read -rp "  Email for Let's Encrypt notifications (${DEFAULT_LE_EMAIL}): " LETSENCRYPT_EMAIL
+        LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-$DEFAULT_LE_EMAIL}"
+    else
+        read -rp "  Email for Let's Encrypt notifications: " LETSENCRYPT_EMAIL
+    fi
+    if [[ -z "$LETSENCRYPT_EMAIL" ]]; then
+        log_error "Email cannot be empty when using Let's Encrypt."
+        exit 1
+    fi
+fi
+
 echo ""
 echo -e "  DQS key:    ${CYAN}${DQS_KEY:0:6}...${DQS_KEY: -4}${NC}"
 echo -e "  Hostname:   ${CYAN}${HOSTNAME_GW}${NC}"
 echo -e "  HBL:        ${CYAN}${HBL_ENABLED}${NC}"
 echo -e "  SPF check:  ${CYAN}${SPF_ENABLED}${NC}"
+if [[ "$LETSENCRYPT_ENABLED" == "y" ]]; then
+    echo -e "  TLS:        ${CYAN}Let's Encrypt${NC}"
+    echo -e "  LE email:   ${CYAN}${LETSENCRYPT_EMAIL}${NC}"
+else
+    echo -e "  TLS:        ${CYAN}Self-signed (snakeoil)${NC}"
+fi
 echo ""
 read -rp "  Proceed with installation? (y/n): " confirm
 [[ "${confirm,,}" != "y" ]] && { echo "Aborted."; exit 0; }
@@ -125,9 +158,15 @@ DQS_KEY="${DQS_KEY}"
 HOSTNAME_GW="${HOSTNAME_GW}"
 HBL_ENABLED="${HBL_ENABLED}"
 SPF_ENABLED="${SPF_ENABLED}"
+LETSENCRYPT_ENABLED="${LETSENCRYPT_ENABLED}"
+LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL}"
 ENVEOF
 chmod 600 "$ENV_FILE"
 log_info "Configuration saved to .env"
+
+TOTAL_STEPS=7
+[[ "$LETSENCRYPT_ENABLED" == "y" ]] && TOTAL_STEPS=8
+STEP=0
 
 # ---------------------------------------------------------------------------
 # Stop existing services before installing (avoids dpkg conflicts)
@@ -169,7 +208,8 @@ dpkg --configure -a 2>/dev/null || true
 # ---------------------------------------------------------------------------
 # Step 2: Install packages
 # ---------------------------------------------------------------------------
-log_step 1 "Installing packages..."
+STEP=$((STEP + 1))
+log_step $STEP "Installing packages..."
 
 export DEBIAN_FRONTEND=noninteractive
 debconf-set-selections <<< "postfix postfix/mailname string ${HOSTNAME_GW}"
@@ -180,15 +220,67 @@ PACKAGES=(postfix spamassassin spamc spamass-milter libmail-spf-perl libmail-dki
 if [[ "$SPF_ENABLED" == "y" ]]; then
     PACKAGES+=(postfix-policyd-spf-python)
 fi
+if [[ "$LETSENCRYPT_ENABLED" == "y" ]]; then
+    PACKAGES+=(certbot)
+fi
 apt-get install -y "${PACKAGES[@]}" \
     || { log_error "apt-get install failed"; exit 1; }
 
 log_info "Packages installed."
 
 # ---------------------------------------------------------------------------
-# Step 3: Configure Postfix
+# Request Let's Encrypt TLS certificate (only when enabled)
 # ---------------------------------------------------------------------------
-log_step 2 "Configuring Postfix..."
+USE_LETSENCRYPT_CERT="n"
+if [[ "$LETSENCRYPT_ENABLED" == "y" ]]; then
+    STEP=$((STEP + 1))
+    log_step $STEP "Requesting TLS certificate (Let's Encrypt)..."
+
+    LE_CERT="/etc/letsencrypt/live/${HOSTNAME_GW}/fullchain.pem"
+    LE_KEY="/etc/letsencrypt/live/${HOSTNAME_GW}/privkey.pem"
+
+    if [[ -f "$LE_CERT" && -f "$LE_KEY" ]]; then
+        log_info "Certificate already exists at ${LE_CERT}"
+        log_info "Skipping request. To force renewal: certbot renew --force-renewal"
+        USE_LETSENCRYPT_CERT="y"
+    else
+        # Check that port 80 is not already in use by another service
+        if ss -tlnp 2>/dev/null | grep -q ':80 '; then
+            PORT80_PROC=$(ss -tlnp 2>/dev/null | grep ':80 ' | head -1)
+            log_error "Port 80 is already in use:"
+            log_error "  ${PORT80_PROC}"
+            log_warn "Stop the service using port 80 and re-run the installer."
+            log_warn "Falling back to self-signed certificate."
+        else
+            echo ""
+            log_info "Requesting certificate for ${HOSTNAME_GW}..."
+            echo ""
+            if certbot certonly --standalone \
+                -d "${HOSTNAME_GW}" \
+                --non-interactive \
+                --agree-tos \
+                -m "${LETSENCRYPT_EMAIL}"; then
+                echo ""
+                log_info "Certificate obtained successfully."
+                USE_LETSENCRYPT_CERT="y"
+            else
+                echo ""
+                log_error "Certbot failed to obtain a certificate."
+                log_warn "Possible causes:"
+                log_warn "  - Port 80 is not reachable from the internet"
+                log_warn "  - DNS for ${HOSTNAME_GW} does not point to this server"
+                log_warn "  - Rate limit reached (too many requests)"
+                log_warn "Falling back to self-signed certificate."
+            fi
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Configure Postfix
+# ---------------------------------------------------------------------------
+STEP=$((STEP + 1))
+log_step $STEP "Configuring Postfix..."
 
 cp "${SCRIPT_DIR}/configs/postfix/main.cf"          /etc/postfix/main.cf
 cp "${SCRIPT_DIR}/configs/postfix/master.cf"         /etc/postfix/master.cf
@@ -200,6 +292,16 @@ sed -i "s/__DQS_KEY__/${DQS_KEY}/g"    /etc/postfix/main.cf
 sed -i "s/__HOSTNAME__/${HOSTNAME_GW}/g" /etc/postfix/main.cf
 sed -i "s/__DQS_KEY__/${DQS_KEY}/g"    /etc/postfix/dnsbl-reply-map
 sed -i "s/__DQS_KEY__/${DQS_KEY}/g"    /etc/postfix/dnsbl_reply
+
+if [[ "$USE_LETSENCRYPT_CERT" == "y" ]]; then
+    sed -i "s|__TLS_CERT__|/etc/letsencrypt/live/${HOSTNAME_GW}/fullchain.pem|" /etc/postfix/main.cf
+    sed -i "s|__TLS_KEY__|/etc/letsencrypt/live/${HOSTNAME_GW}/privkey.pem|"    /etc/postfix/main.cf
+    log_info "TLS: Let's Encrypt certificate"
+else
+    sed -i "s|__TLS_CERT__|/etc/ssl/certs/ssl-cert-snakeoil.pem|"   /etc/postfix/main.cf
+    sed -i "s|__TLS_KEY__|/etc/ssl/private/ssl-cert-snakeoil.key|"   /etc/postfix/main.cf
+    log_info "TLS: self-signed certificate (snakeoil)"
+fi
 
 if [[ "$SPF_ENABLED" == "y" ]]; then
     sed -i 's/__SPF_CHECK__/check_policy_service unix:private\/policyd-spf,/' /etc/postfix/main.cf
@@ -222,12 +324,23 @@ fi
 
 postmap hash:/etc/postfix/dnsbl-reply-map
 
+if [[ "$USE_LETSENCRYPT_CERT" == "y" ]]; then
+    mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+    cat > /etc/letsencrypt/renewal-hooks/deploy/postfix-reload.sh <<'HOOKEOF'
+#!/bin/bash
+systemctl reload postfix
+HOOKEOF
+    chmod +x /etc/letsencrypt/renewal-hooks/deploy/postfix-reload.sh
+    log_info "Auto-renewal hook installed (postfix reload on cert renewal)"
+fi
+
 log_info "Postfix configuration deployed."
 
 # ---------------------------------------------------------------------------
 # Step 4: Configure SpamAssassin + Spamhaus DQS plugin
 # ---------------------------------------------------------------------------
-log_step 3 "Configuring SpamAssassin + Spamhaus DQS..."
+STEP=$((STEP + 1))
+log_step $STEP "Configuring SpamAssassin + Spamhaus DQS..."
 
 cp "${SCRIPT_DIR}/configs/spamassassin/local.cf" /etc/spamassassin/local.cf
 
@@ -293,7 +406,8 @@ log_info "SpamAssassin configuration deployed."
 # ---------------------------------------------------------------------------
 # Step 5: Generate transport maps from domains.conf
 # ---------------------------------------------------------------------------
-log_step 4 "Generating transport maps from domains.conf..."
+STEP=$((STEP + 1))
+log_step $STEP "Generating transport maps from domains.conf..."
 
 DOMAINS_CONF="${SCRIPT_DIR}/domains.conf"
 TRANSPORT="/etc/postfix/transport"
@@ -337,7 +451,8 @@ fi
 # ---------------------------------------------------------------------------
 # Step 6: Configure milter and start services
 # ---------------------------------------------------------------------------
-log_step 5 "Deploying mail-logger (per-domain CSV logs)..."
+STEP=$((STEP + 1))
+log_step $STEP "Deploying mail-logger (per-domain CSV logs)..."
 
 mkdir -p /opt/mail-gateway/scripts
 cp "${SCRIPT_DIR}/scripts/mail-logger.py" /opt/mail-gateway/scripts/mail-logger.py
@@ -350,7 +465,8 @@ mkdir -p /var/lib/mail-gateway
 log_info "Mail logger installed at /opt/mail-gateway/scripts/mail-logger.py"
 log_info "Per-domain logs at /var/log/spamhaus/<domain>/activity.log"
 
-log_step 6 "Configuring spamass-milter..."
+STEP=$((STEP + 1))
+log_step $STEP "Configuring spamass-milter..."
 
 mkdir -p /var/spool/postfix/spamass
 chown spamass-milter:postfix /var/spool/postfix/spamass
@@ -362,7 +478,8 @@ EOF
 
 log_info "Milter socket: /var/spool/postfix/spamass/spamass.sock"
 
-log_step 7 "Starting services..."
+STEP=$((STEP + 1))
+log_step $STEP "Starting services..."
 
 sed -i 's/^ENABLED=0/ENABLED=1/' /etc/default/spamassassin 2>/dev/null || true
 systemctl daemon-reload
@@ -453,6 +570,18 @@ else
     echo -e "  ${GREEN}OK${NC}  Log directory /var/log/spamhaus/ created"
 fi
 
+if [[ "$USE_LETSENCRYPT_CERT" == "y" ]]; then
+    if [[ -f "/etc/letsencrypt/live/${HOSTNAME_GW}/fullchain.pem" ]]; then
+        CERT_EXPIRY=$(openssl x509 -enddate -noout -in "/etc/letsencrypt/live/${HOSTNAME_GW}/fullchain.pem" 2>/dev/null | cut -d= -f2)
+        echo -e "  ${GREEN}OK${NC}  TLS certificate (Let's Encrypt, expires: ${CERT_EXPIRY})"
+    else
+        echo -e "  ${RED}FAIL${NC}  TLS certificate not found at /etc/letsencrypt/live/${HOSTNAME_GW}/"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo -e "  ${GREEN}OK${NC}  TLS certificate (self-signed snakeoil)"
+fi
+
 echo ""
 
 if [[ $ERRORS -eq 0 ]]; then
@@ -470,6 +599,11 @@ echo -e "  Gateway hostname:  ${CYAN}${HOSTNAME_GW}${NC}"
 echo -e "  DQS key:           ${CYAN}${DQS_KEY:0:6}...${DQS_KEY: -4}${NC}"
 echo -e "  HBL enabled:       ${CYAN}${HBL_ENABLED}${NC}"
 echo -e "  SPF check:         ${CYAN}${SPF_ENABLED}${NC}"
+if [[ "$USE_LETSENCRYPT_CERT" == "y" ]]; then
+    echo -e "  TLS certificate:   ${CYAN}Let's Encrypt (/etc/letsencrypt/live/${HOSTNAME_GW}/)${NC}"
+else
+    echo -e "  TLS certificate:   ${CYAN}Self-signed (snakeoil)${NC}"
+fi
 echo -e "  Relay domains:     ${CYAN}${DOMAIN_COUNT}${NC}"
 echo -e "  Logs:              ${CYAN}/var/log/spamhaus/<domain>/activity.log${NC}"
 echo ""
@@ -484,4 +618,8 @@ echo "  View mail logs:       journalctl -u postfix -f"
 echo "  View SA logs:         journalctl -u spamassassin -f"
 echo "  View logger status:   systemctl status mail-logger"
 echo "  Browse domain logs:   ls /var/log/spamhaus/"
+if [[ "$USE_LETSENCRYPT_CERT" == "y" ]]; then
+    echo "  Renew TLS cert:      certbot renew"
+    echo "  Cert status:         certbot certificates"
+fi
 echo ""

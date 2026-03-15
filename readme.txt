@@ -8,6 +8,10 @@ SpamAssassin content analysis, HBL hash-based blocklists, and dangerous
 attachment blocking), then relays clean mail to destination SMTP servers
 based on per-domain routing rules.
 
+Optionally enables TLS encryption with a Let's Encrypt certificate
+(via certbot) so the gateway uses trusted STARTTLS for server-to-server
+communication, with automatic certificate renewal.
+
 Designed for use as a front-line mail gateway that sits between the internet
 and your internal mail servers, providing enterprise-grade spam filtering
 with Spamhaus real-time data.
@@ -22,6 +26,7 @@ REQUIREMENTS
 - Root access
 - Spamhaus DQS key (https://www.spamhaustech.com)
 - Port 25 open on firewall
+- Port 80 open on firewall (only if using Let's Encrypt TLS)
 
 DNS requirements (configure BEFORE installing):
 - A record:   gateway.yourdomain.com -> server IP
@@ -52,6 +57,10 @@ INSTALLATION
      - Whether to enable SPF checking (y/n)
        If enabled, mail that fails SPF is rejected at SMTP level.
        If disabled, SPF is still evaluated by SpamAssassin scoring.
+     - Whether to enable TLS with Let's Encrypt (y/n)
+       If enabled, certbot requests a certificate for the gateway
+       hostname. Requires port 80 open. If disabled or if the
+       request fails, a self-signed certificate is used instead.
 
    Answers are saved to .env for future runs. When re-running the
    installer, previous values appear as defaults and can be accepted
@@ -103,16 +112,20 @@ No service restart required.
 
 SERVICES
 --------
-The gateway runs 4 independent services:
+The gateway runs 4 independent services (5 if Let's Encrypt is enabled):
 
   +-------------------+----------------------------------------------+
   | Service           | Purpose                                      |
   +-------------------+----------------------------------------------+
-  | postfix           | MTA - receives and relays mail               |
+  | postfix           | MTA - receives and relays mail (TLS enabled) |
   | spamd             | SpamAssassin daemon - content filtering       |
   | spamass-milter    | Connects Postfix to SpamAssassin             |
   | mail-logger       | Real-time log parser, per-domain CSV output  |
+  | certbot.timer *   | Auto-renews Let's Encrypt TLS certificate    |
   +-------------------+----------------------------------------------+
+
+  * certbot.timer is only present when Let's Encrypt TLS is enabled.
+    It runs "certbot renew" twice daily and reloads Postfix on renewal.
 
   Note: on Ubuntu 24.04 the SpamAssassin service is called "spamd".
   On older versions it may be called "spamassassin". The installer
@@ -143,6 +156,7 @@ Service commands:
     sudo systemctl status spamd
     sudo systemctl status spamass-milter
     sudo systemctl status mail-logger
+    sudo systemctl status certbot.timer    (if Let's Encrypt enabled)
 
   Quick status for all:
     for s in postfix spamd spamass-milter mail-logger; do
@@ -174,6 +188,42 @@ LOGS
 
   Per-domain subdirectories are created automatically when the first
   mail arrives for that domain.
+
+
+TLS / LET'S ENCRYPT
+--------------------
+The installer can optionally request a TLS certificate from Let's
+Encrypt using certbot. This replaces the default self-signed (snakeoil)
+certificate and enables trusted STARTTLS encryption between mail servers.
+
+Requirements:
+  - Port 80 must be open and reachable from the internet
+  - DNS A record for the gateway hostname must point to the server IP
+
+Certificate location:
+  /etc/letsencrypt/live/<hostname>/fullchain.pem   (certificate)
+  /etc/letsencrypt/live/<hostname>/privkey.pem     (private key)
+
+Automatic renewal:
+  Certbot installs a systemd timer (certbot.timer) that runs
+  "certbot renew" automatically twice a day. A deploy hook at
+  /etc/letsencrypt/renewal-hooks/deploy/postfix-reload.sh reloads
+  Postfix whenever the certificate is renewed.
+
+  Check renewal timer status:
+    systemctl status certbot.timer
+
+Manual commands:
+  View certificate status:    certbot certificates
+  Test renewal (dry run):     certbot renew --dry-run
+  Force renewal:              certbot renew --force-renewal
+  Renew and reload Postfix:   certbot renew
+
+If Let's Encrypt is not enabled during installation (or if the
+certificate request fails), Postfix uses the self-signed snakeoil
+certificate. TLS is still active (opportunistic), but other servers
+may not trust the certificate. Re-run the installer to switch to
+Let's Encrypt at any time.
 
 
 TESTING
@@ -235,6 +285,7 @@ FILE STRUCTURE
   Files deployed on the server:
   /etc/postfix/                   Postfix config (with DQS key applied)
   /etc/spamassassin/              SA config + Spamhaus DQS plugin
+  /etc/letsencrypt/               TLS certificates (if Let's Encrypt enabled)
   /opt/mail-gateway/scripts/      Mail logger
   /var/log/spamhaus/              Per-domain logs (activity.log)
   /var/lib/mail-gateway/          Logger state (read position tracking)
