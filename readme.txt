@@ -151,6 +151,22 @@ LOGS
   mail arrives for that domain.
 
 
+TESTING
+-------
+  Interactive test (prompts for sender and recipient, sends via localhost):
+
+     sudo ./test.sh
+
+  This sends a test email through the gateway and shows:
+  - SMTP server response (accepted, rejected, blocked)
+  - Postfix log entries for the message
+  - Per-domain activity log entry
+  - Queue status (delivered, deferred, bounced)
+
+  No MX records needed. Useful for verifying the gateway works before
+  pointing DNS to the server.
+
+
 VERIFICATION
 ------------
   Verify SpamAssassin configuration:
@@ -174,6 +190,7 @@ FILE STRUCTURE
   /opt/mail-gateway/              (or wherever the project is copied)
   ├── install.sh                  Interactive installation script
   ├── update-domains.sh           Update domains without reinstalling
+  ├── test.sh                     Interactive gateway test (send via localhost)
   ├── domains.conf                Domain -> relay SMTP mapping
   ├── .env                        Saved config (generated on install)
   ├── readme.txt                  This file
