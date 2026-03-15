@@ -1,5 +1,5 @@
 ===============================================================================
-  POSTFIX + SPAMASSASSIN MAIL GATEWAY - Spamhaus DQS
+  POSTFIX + SPAMASSASSIN MAIL GATEWAY - Spamhaus DQS (paid service)
 ===============================================================================
 
 Automated setup for a mail filtering gateway that receives incoming email,
