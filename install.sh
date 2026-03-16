@@ -62,6 +62,7 @@ DEFAULT_RCPT_VERIFY_NEGATIVE_CACHE="3d"
 DEFAULT_SRS="n"
 DEFAULT_LETSENCRYPT="n"
 DEFAULT_LE_EMAIL=""
+DEFAULT_LOG_RETENTION="5"
 
 if [[ -f "$ENV_FILE" ]]; then
     source "$ENV_FILE"
@@ -74,6 +75,7 @@ if [[ -f "$ENV_FILE" ]]; then
     DEFAULT_SRS="${SRS_ENABLED:-n}"
     DEFAULT_LETSENCRYPT="${LETSENCRYPT_ENABLED:-n}"
     DEFAULT_LE_EMAIL="${LETSENCRYPT_EMAIL:-}"
+    DEFAULT_LOG_RETENTION="${LOG_RETENTION_DAYS:-5}"
     log_info "Previous configuration loaded from .env"
     echo ""
 fi
@@ -159,6 +161,13 @@ if [[ "${LE_INPUT,,}" == "y" || "${LE_INPUT,,}" == "yes" ]]; then
     fi
 fi
 
+read -rp "  Log retention in days (${DEFAULT_LOG_RETENTION}): " LOG_RETENTION_INPUT
+LOG_RETENTION_DAYS="${LOG_RETENTION_INPUT:-$DEFAULT_LOG_RETENTION}"
+if ! [[ "$LOG_RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]]; then
+    log_error "Log retention must be a positive integer."
+    exit 1
+fi
+
 echo ""
 echo -e "  DQS key:    ${CYAN}${DQS_KEY:0:6}...${DQS_KEY: -4}${NC}"
 echo -e "  Hostname:   ${CYAN}${HOSTNAME_GW}${NC}"
@@ -167,6 +176,7 @@ echo -e "  SPF check:  ${CYAN}${SPF_ENABLED}${NC}"
 echo -e "  Rcpt verify:${CYAN} ${RCPT_VERIFY_ENABLED}${NC}"
 [[ "$RCPT_VERIFY_ENABLED" == "y" ]] && echo -e "  Neg. cache:  ${CYAN}${RCPT_VERIFY_NEGATIVE_CACHE}${NC}"
 echo -e "  SRS:        ${CYAN}${SRS_ENABLED}${NC}"
+echo -e "  Log retain: ${CYAN}${LOG_RETENTION_DAYS} days${NC}"
 if [[ "$LETSENCRYPT_ENABLED" == "y" ]]; then
     echo -e "  TLS:        ${CYAN}Let's Encrypt${NC}"
     echo -e "  LE email:   ${CYAN}${LETSENCRYPT_EMAIL}${NC}"
@@ -213,6 +223,10 @@ SRS_ENABLED="${SRS_ENABLED}"
 # Requires port 80 open. Falls back to self-signed if disabled.
 LETSENCRYPT_ENABLED="${LETSENCRYPT_ENABLED}"
 LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL}"
+
+# How many days of daily log files to keep under /var/log/spamhaus/.
+# One file per day per domain + general + spamhaus_blocks.
+LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS}"
 ENVEOF
 chmod 600 "$ENV_FILE"
 log_info "Configuration saved to .env"
@@ -569,12 +583,14 @@ mkdir -p /opt/mail-gateway/scripts
 cp "${SCRIPT_DIR}/scripts/mail-logger.py" /opt/mail-gateway/scripts/mail-logger.py
 chmod +x /opt/mail-gateway/scripts/mail-logger.py
 cp "${SCRIPT_DIR}/scripts/mail-logger.service" /etc/systemd/system/mail-logger.service
+sed -i "s/__LOG_RETENTION__/${LOG_RETENTION_DAYS}/g" /etc/systemd/system/mail-logger.service
 
 mkdir -p /var/log/spamhaus
 mkdir -p /var/lib/mail-gateway
 
 log_info "Mail logger installed at /opt/mail-gateway/scripts/mail-logger.py"
-log_info "Per-domain logs at /var/log/spamhaus/<domain>/activity.log"
+log_info "Log rotation: daily, retention ${LOG_RETENTION_DAYS} days"
+log_info "Per-domain logs at /var/log/spamhaus/<domain>/activity_YYYY-MM-DD.log"
 
 STEP=$((STEP + 1))
 log_step $STEP "Configuring spamass-milter..."
@@ -736,7 +752,8 @@ else
     echo -e "  TLS certificate:   ${CYAN}Self-signed (snakeoil)${NC}"
 fi
 echo -e "  Relay domains:     ${CYAN}${DOMAIN_COUNT}${NC}"
-echo -e "  Logs:              ${CYAN}/var/log/spamhaus/<domain>/activity.log${NC}"
+echo -e "  Log retention:     ${CYAN}${LOG_RETENTION_DAYS} days${NC}"
+echo -e "  Logs:              ${CYAN}/var/log/spamhaus/<domain>/activity_YYYY-MM-DD.log${NC}"
 echo ""
 echo -e "${BOLD}Next steps:${NC}"
 echo "  1. Edit ${SCRIPT_DIR}/domains.conf to add your relay domains"

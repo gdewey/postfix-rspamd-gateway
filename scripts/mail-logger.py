@@ -2,8 +2,12 @@
 """
 mail-logger.py - Real-time Postfix mail log parser for the gateway.
 
-Watches /var/log/mail.log and writes per-domain log files to:
-    /var/log/spamhaus/<recipient_domain>/activity.log
+Watches /var/log/mail.log and writes daily per-domain log files to:
+    /var/log/spamhaus/<recipient_domain>/activity_YYYY-MM-DD.log
+
+Also writes consolidated logs:
+    /var/log/spamhaus/general_activity_YYYY-MM-DD.log
+    /var/log/spamhaus/spamhaus_blocks_YYYY-MM-DD.log
 
 Log format (CSV):
     timestamp,sender,recipient,status,reason
@@ -15,9 +19,13 @@ Statuses:
     defer  - Delivery temporarily failed, will retry
     bounce - Delivery permanently failed
 
+Logs rotate daily (one file per day) and old files beyond --retention-days
+are automatically deleted.
+
 Usage:
-    python3 mail-logger.py              # foreground (tail from end)
-    python3 mail-logger.py --catchup    # process existing log first, then tail
+    python3 mail-logger.py                          # foreground (tail from end)
+    python3 mail-logger.py --catchup                # process existing log first
+    python3 mail-logger.py --retention-days 7       # keep 7 days of logs
 """
 
 import os
@@ -27,15 +35,17 @@ import csv
 import time
 import signal
 import argparse
-from datetime import datetime
-from collections import defaultdict
+from datetime import date, timedelta
 
 LOG_FILE = "/var/log/mail.log"
 OUTPUT_DIR = "/var/log/spamhaus"
-GENERAL_LOG = "/var/log/spamhaus/general_activity.log"
 STATE_FILE = "/var/lib/mail-gateway/last_position"
 MAX_QUEUE_ENTRIES = 50000
-SPAMHAUS_LOG = "/var/log/spamhaus/spamhaus_blocks.log"
+
+DATE_LOG_RE = re.compile(r"_(\d{4}-\d{2}-\d{2})\.log$")
+
+retention_days = 5
+_current_date = None
 
 SPAMHAUS_LISTS = [
     ("sbl-xbl.spamhaus.org", "SBL+XBL - Combined spam sources and exploited hosts"),
@@ -57,6 +67,29 @@ def get_domain(email):
     return "unknown"
 
 
+def _dated_path(directory, base_name):
+    today = date.today().isoformat()
+    return os.path.join(directory, f"{base_name}_{today}.log")
+
+
+def cleanup_old_logs():
+    cutoff = date.today() - timedelta(days=retention_days)
+    for dirpath, _dirnames, filenames in os.walk(OUTPUT_DIR):
+        for fname in filenames:
+            m = DATE_LOG_RE.search(fname)
+            if not m:
+                continue
+            try:
+                file_date = date.fromisoformat(m.group(1))
+            except ValueError:
+                continue
+            if file_date < cutoff:
+                try:
+                    os.remove(os.path.join(dirpath, fname))
+                except OSError:
+                    pass
+
+
 def _append_csv(path, header, row):
     file_exists = os.path.exists(path) and os.path.getsize(path) > 0
     with open(path, "a", newline="") as f:
@@ -72,12 +105,12 @@ def write_log_entry(domain, timestamp, sender, recipient, status, reason=""):
     os.makedirs(domain_dir, exist_ok=True)
 
     _append_csv(
-        os.path.join(domain_dir, "activity.log"),
+        _dated_path(domain_dir, "activity"),
         ["timestamp", "sender", "recipient", "status", "reason"],
         [timestamp, sender, recipient, status, reason],
     )
     _append_csv(
-        GENERAL_LOG,
+        _dated_path(OUTPUT_DIR, "general_activity"),
         ["timestamp", "domain", "sender", "recipient", "status", "reason"],
         [timestamp, domain, sender, recipient, status, reason],
     )
@@ -99,7 +132,7 @@ def detect_spamhaus(reason):
 def write_spamhaus_entry(timestamp, domain, sender, recipient, client_ip,
                          spamhaus_list, list_description, block_stage, reason):
     _append_csv(
-        SPAMHAUS_LOG,
+        _dated_path(OUTPUT_DIR, "spamhaus_blocks"),
         ["timestamp", "domain", "sender", "recipient", "client_ip",
          "spamhaus_list", "list_description", "block_stage", "reason"],
         [timestamp, domain, sender, recipient, client_ip,
@@ -281,8 +314,17 @@ def cleanup_queue():
             del queue_data[k]
 
 
+def _check_date_rotation():
+    global _current_date
+    today = date.today()
+    if _current_date != today:
+        _current_date = today
+        cleanup_old_logs()
+
+
 def tail_log(catchup=False):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    _check_date_rotation()
 
     saved_inode, saved_pos = load_position() if catchup else (0, 0)
     counter = 0
@@ -311,8 +353,10 @@ def tail_log(catchup=False):
                         if counter % 500 == 0:
                             save_position(f.tell(), current_inode)
                             cleanup_queue()
+                            _check_date_rotation()
                     else:
                         save_position(f.tell(), current_inode)
+                        _check_date_rotation()
                         try:
                             new_stat = os.stat(LOG_FILE)
                             if new_stat.st_ino != current_inode:
@@ -326,13 +370,22 @@ def tail_log(catchup=False):
 
 
 def main():
+    global retention_days
+
     parser = argparse.ArgumentParser(description="Postfix mail gateway log parser")
     parser.add_argument(
         "--catchup",
         action="store_true",
         help="Process existing log from last position before tailing",
     )
+    parser.add_argument(
+        "--retention-days",
+        type=int,
+        default=5,
+        help="Number of daily log files to keep (default: 5)",
+    )
     args = parser.parse_args()
+    retention_days = args.retention_days
 
     def handle_signal(sig, frame):
         sys.exit(0)

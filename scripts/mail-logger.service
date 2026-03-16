@@ -6,7 +6,7 @@ Requires=postfix.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/mail-gateway/scripts/mail-logger.py --catchup
+ExecStart=/usr/bin/python3 /opt/mail-gateway/scripts/mail-logger.py --catchup --retention-days __LOG_RETENTION__
 Restart=always
 RestartSec=5
 StandardOutput=journal
