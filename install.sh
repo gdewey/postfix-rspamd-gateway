@@ -58,6 +58,7 @@ DEFAULT_HOSTNAME=""
 DEFAULT_HBL="n"
 DEFAULT_SPF="n"
 DEFAULT_RCPT_VERIFY="n"
+DEFAULT_RCPT_VERIFY_NEGATIVE_CACHE="3d"
 DEFAULT_SRS="n"
 DEFAULT_LETSENCRYPT="n"
 DEFAULT_LE_EMAIL=""
@@ -69,6 +70,7 @@ if [[ -f "$ENV_FILE" ]]; then
     DEFAULT_HBL="${HBL_ENABLED:-n}"
     DEFAULT_SPF="${SPF_ENABLED:-n}"
     DEFAULT_RCPT_VERIFY="${RCPT_VERIFY_ENABLED:-n}"
+    DEFAULT_RCPT_VERIFY_NEGATIVE_CACHE="${RCPT_VERIFY_NEGATIVE_CACHE:-3d}"
     DEFAULT_SRS="${SRS_ENABLED:-n}"
     DEFAULT_LETSENCRYPT="${LETSENCRYPT_ENABLED:-n}"
     DEFAULT_LE_EMAIL="${LETSENCRYPT_EMAIL:-}"
@@ -121,6 +123,12 @@ RCPT_VERIFY_INPUT="${RCPT_VERIFY_INPUT:-$DEFAULT_RCPT_VERIFY}"
 RCPT_VERIFY_ENABLED="n"
 [[ "${RCPT_VERIFY_INPUT,,}" == "y" || "${RCPT_VERIFY_INPUT,,}" == "yes" ]] && RCPT_VERIFY_ENABLED="y"
 
+RCPT_VERIFY_NEGATIVE_CACHE="3d"
+if [[ "$RCPT_VERIFY_ENABLED" == "y" ]]; then
+    read -rp "  Negative cache TTL for unverified recipients (${DEFAULT_RCPT_VERIFY_NEGATIVE_CACHE}): " RCPT_CACHE_INPUT
+    RCPT_VERIFY_NEGATIVE_CACHE="${RCPT_CACHE_INPUT:-$DEFAULT_RCPT_VERIFY_NEGATIVE_CACHE}"
+fi
+
 read -rp "  Enable SRS? Rewrite envelope sender for SPF compliance at destination (${DEFAULT_SRS}): " SRS_INPUT
 SRS_INPUT="${SRS_INPUT:-$DEFAULT_SRS}"
 SRS_ENABLED="n"
@@ -157,6 +165,7 @@ echo -e "  Hostname:   ${CYAN}${HOSTNAME_GW}${NC}"
 echo -e "  HBL:        ${CYAN}${HBL_ENABLED}${NC}"
 echo -e "  SPF check:  ${CYAN}${SPF_ENABLED}${NC}"
 echo -e "  Rcpt verify:${CYAN} ${RCPT_VERIFY_ENABLED}${NC}"
+[[ "$RCPT_VERIFY_ENABLED" == "y" ]] && echo -e "  Neg. cache:  ${CYAN}${RCPT_VERIFY_NEGATIVE_CACHE}${NC}"
 echo -e "  SRS:        ${CYAN}${SRS_ENABLED}${NC}"
 if [[ "$LETSENCRYPT_ENABLED" == "y" ]]; then
     echo -e "  TLS:        ${CYAN}Let's Encrypt${NC}"
@@ -189,6 +198,11 @@ SPF_ENABLED="${SPF_ENABLED}"
 # Only enable if destination servers reject unknown recipients (550).
 # If destination is catch-all (accepts everything), leave disabled.
 RCPT_VERIFY_ENABLED="${RCPT_VERIFY_ENABLED}"
+
+# Negative cache TTL for recipient verification.
+# How long to remember that a recipient was invalid before re-probing.
+# Postfix time units: s (seconds), m (minutes), h (hours), d (days), w (weeks).
+RCPT_VERIFY_NEGATIVE_CACHE="${RCPT_VERIFY_NEGATIVE_CACHE}"
 
 # SRS (Sender Rewriting Scheme) via postsrsd (y/n)
 # Rewrites envelope sender so relayed mail passes SPF at destination.
@@ -368,17 +382,24 @@ fi
 
 if [[ "$RCPT_VERIFY_ENABLED" == "y" ]]; then
     sed -i 's/__RCPT_VERIFY__/reject_unverified_recipient,/' /etc/postfix/main.cf
+
+    if [[ "$RCPT_VERIFY_NEGATIVE_CACHE" == *d* ]] || [[ "$RCPT_VERIFY_NEGATIVE_CACHE" == *w* ]]; then
+        RCPT_NEG_REFRESH="3h"
+    else
+        RCPT_NEG_REFRESH="1h"
+    fi
+
     sed -i '/__RCPT_VERIFY_CONFIG__/{
         r /dev/stdin
         d
-    }' /etc/postfix/main.cf <<'RCPTEOF'
+    }' /etc/postfix/main.cf <<RCPTEOF
 address_verify_map = btree:/var/lib/postfix/verify
 unverified_recipient_reject_code = 550
 address_verify_positive_expire_time = 7d
-address_verify_negative_expire_time = 3d
-address_verify_negative_refresh_time = 3h
+address_verify_negative_expire_time = ${RCPT_VERIFY_NEGATIVE_CACHE}
+address_verify_negative_refresh_time = ${RCPT_NEG_REFRESH}
 RCPTEOF
-    log_info "Recipient verification: ENABLED (probe destination server)"
+    log_info "Recipient verification: ENABLED (negative cache: ${RCPT_VERIFY_NEGATIVE_CACHE})"
 else
     sed -i '/__RCPT_VERIFY__/d' /etc/postfix/main.cf
     sed -i '/__RCPT_VERIFY_CONFIG__/d' /etc/postfix/main.cf
@@ -707,6 +728,7 @@ echo -e "  DQS key:           ${CYAN}${DQS_KEY:0:6}...${DQS_KEY: -4}${NC}"
 echo -e "  HBL enabled:       ${CYAN}${HBL_ENABLED}${NC}"
 echo -e "  SPF check:         ${CYAN}${SPF_ENABLED}${NC}"
 echo -e "  Rcpt verify:       ${CYAN}${RCPT_VERIFY_ENABLED}${NC}"
+[[ "$RCPT_VERIFY_ENABLED" == "y" ]] && echo -e "  Neg. cache:        ${CYAN}${RCPT_VERIFY_NEGATIVE_CACHE}${NC}"
 echo -e "  SRS:               ${CYAN}${SRS_ENABLED}${NC}"
 if [[ "$USE_LETSENCRYPT_CERT" == "y" ]]; then
     echo -e "  TLS certificate:   ${CYAN}Let's Encrypt (/etc/letsencrypt/live/${HOSTNAME_GW}/)${NC}"

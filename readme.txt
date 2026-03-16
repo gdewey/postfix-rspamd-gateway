@@ -101,10 +101,15 @@ INSTALLATION
      - Whether to enable SPF checking (y/n)
        If enabled, mail that fails SPF is rejected at SMTP level.
        If disabled, SPF is still evaluated by SpamAssassin scoring.
-     - Whether to enable recipient verification (y/n)
-       If enabled, the gateway probes destination servers to verify
-       recipients exist before accepting mail. Prevents backscatter.
-       Only enable if destination servers reject unknown users.
+    - Whether to enable recipient verification (y/n)
+      If enabled, the gateway probes destination servers to verify
+      recipients exist before accepting mail. Prevents backscatter.
+      Only enable if destination servers reject unknown users.
+    - Negative cache TTL (only when recipient verification is enabled)
+      How long to remember that a recipient was invalid before
+      re-probing the destination server. Default: 3d.
+      Use a shorter value (e.g. 2h) if you frequently add mailboxes
+      and want the gateway to detect them faster.
      - Whether to enable SRS (y/n)
        If enabled, rewrites envelope senders so that relayed mail
        passes SPF validation at destination servers. Uses postsrsd.
@@ -324,12 +329,17 @@ How it works:
   6. Result is cached to avoid repeated probes
 
 Cache settings (configured in main.cf when enabled):
-  address_verify_positive_expire_time = 7d   (valid user cached 7 days)
-  address_verify_negative_expire_time = 3d   (invalid user cached 3 days)
-  address_verify_negative_refresh_time = 3h  (retry invalid after 3 hours)
+  address_verify_positive_expire_time = 7d    (valid user cached 7 days)
+  address_verify_negative_expire_time = TTL   (invalid user cached for TTL)
+  address_verify_negative_refresh_time = auto (1h if TTL < 1 day, 3h otherwise)
+
+  The negative cache TTL is configurable during installation (default: 3d).
+  The value is saved in .env as RCPT_VERIFY_NEGATIVE_CACHE and can be
+  changed by editing .env and re-running the installer.
 
   If you add or remove mailboxes on the destination server, the cache
-  may hold stale results for up to these durations. To flush the cache:
+  may hold stale results for up to the TTL duration. To flush the cache
+  immediately for a specific address:
     postmap -d user@domain btree:/var/lib/postfix/verify
 
 Note: the first message to a new recipient adds a small delay (2-10s)
