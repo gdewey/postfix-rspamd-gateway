@@ -125,7 +125,7 @@ RCPT_VERIFY_ENABLED="n"
 
 RCPT_VERIFY_NEGATIVE_CACHE="3d"
 if [[ "$RCPT_VERIFY_ENABLED" == "y" ]]; then
-    read -rp "  Negative cache TTL for unverified recipients (${DEFAULT_RCPT_VERIFY_NEGATIVE_CACHE}): " RCPT_CACHE_INPUT
+    read -rp "  Negative cache TTL for unverified recipients [e.g. 3d, 2h, 30m] (${DEFAULT_RCPT_VERIFY_NEGATIVE_CACHE}): " RCPT_CACHE_INPUT
     RCPT_VERIFY_NEGATIVE_CACHE="${RCPT_CACHE_INPUT:-$DEFAULT_RCPT_VERIFY_NEGATIVE_CACHE}"
 fi
 
