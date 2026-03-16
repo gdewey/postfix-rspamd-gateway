@@ -35,6 +35,18 @@ OUTPUT_DIR = "/var/log/spamhaus"
 GENERAL_LOG = "/var/log/spamhaus/general_activity.log"
 STATE_FILE = "/var/lib/mail-gateway/last_position"
 MAX_QUEUE_ENTRIES = 50000
+SPAMHAUS_LOG = "/var/log/spamhaus/spamhaus_blocks.log"
+
+SPAMHAUS_LISTS = [
+    ("sbl-xbl.spamhaus.org", "SBL+XBL - Combined spam sources and exploited hosts"),
+    ("sbl.spamhaus.org", "SBL - Known spam sources (verified spam operations)"),
+    ("css.spamhaus.org", "CSS - Snowshoe spam (low-volume distributed spam)"),
+    ("xbl.spamhaus.org", "XBL - Exploited hosts (botnets, compromised servers, open proxies)"),
+    ("pbl.spamhaus.org", "PBL - Policy Block List (dynamic/residential IPs, not for direct SMTP)"),
+    ("zen.spamhaus.org", "ZEN - Combined list (SBL + CSS + XBL + PBL)"),
+    ("dbl.spamhaus.org", "DBL - Domain Block List (domains used in spam or phishing)"),
+    ("zrd.spamhaus.org", "ZRD - Zero Reputation Domains (newly registered, not yet trusted)"),
+]
 
 queue_data = {}
 
@@ -71,6 +83,30 @@ def write_log_entry(domain, timestamp, sender, recipient, status, reason=""):
     )
 
 
+def extract_client_ip(client_str):
+    m = re.search(r'\[(\d+\.\d+\.\d+\.\d+)\]', client_str)
+    return m.group(1) if m else ""
+
+
+def detect_spamhaus(reason):
+    reason_lower = reason.lower()
+    for list_id, description in SPAMHAUS_LISTS:
+        if list_id in reason_lower:
+            return list_id, description
+    return None, None
+
+
+def write_spamhaus_entry(timestamp, domain, sender, recipient, client_ip,
+                         spamhaus_list, list_description, block_stage, reason):
+    _append_csv(
+        SPAMHAUS_LOG,
+        ["timestamp", "domain", "sender", "recipient", "client_ip",
+         "spamhaus_list", "list_description", "block_stage", "reason"],
+        [timestamp, domain, sender, recipient, client_ip,
+         spamhaus_list, list_description, block_stage, reason],
+    )
+
+
 def clean_email(addr):
     return addr.strip("<>").strip()
 
@@ -86,34 +122,50 @@ def parse_line(line):
         return
     timestamp = ts_match.group(1)
 
-    # --- NOQUEUE: reject from smtpd (RBL, RHSBL, policy, etc.) ---
+    # --- NOQUEUE: reject from smtpd or postscreen (RBL, RHSBL, DNSBL, policy) ---
     noqueue = re.search(
-        r"postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from\s+\S+: "
+        r"postfix/(smtpd|postscreen)\[\d+\]: NOQUEUE: reject: RCPT from\s+(\S+): "
         r"(.+?);\s+from=<([^>]*)>\s+to=<([^>]*)>",
         line,
     )
     if noqueue:
-        reason = noqueue.group(1).strip()
-        sender = clean_email(noqueue.group(2)) or "unknown"
-        recipient = clean_email(noqueue.group(3)) or "unknown"
+        stage = noqueue.group(1)
+        client_str = noqueue.group(2)
+        reason = noqueue.group(3).strip()
+        sender = clean_email(noqueue.group(4)) or "unknown"
+        recipient = clean_email(noqueue.group(5)) or "unknown"
         domain = get_domain(recipient)
         write_log_entry(domain, timestamp, sender, recipient, "block", reason)
+        spamhaus_list, list_desc = detect_spamhaus(reason)
+        if spamhaus_list:
+            write_spamhaus_entry(
+                timestamp, domain, sender, recipient,
+                extract_client_ip(client_str),
+                spamhaus_list, list_desc, stage, reason,
+            )
         return
 
     # --- milter-reject (SpamAssassin score >= reject threshold) ---
     milter_rej = re.search(
-        r"postfix/cleanup\[\d+\]: [A-F0-9]+: milter-reject: .+? from\s+\S+:\s+"
+        r"postfix/cleanup\[\d+\]: [A-F0-9]+: milter-reject: .+? from\s+(\S+):\s+"
         r"(.+?);\s+from=<([^>]*)>\s+to=<([^>]*)>",
         line,
     )
     if milter_rej:
-        reason = milter_rej.group(1).strip()
-        sender = clean_email(milter_rej.group(2)) or "unknown"
-        recipient = clean_email(milter_rej.group(3)) or "unknown"
+        client_str = milter_rej.group(1)
+        reason = milter_rej.group(2).strip()
+        sender = clean_email(milter_rej.group(3)) or "unknown"
+        recipient = clean_email(milter_rej.group(4)) or "unknown"
         domain = get_domain(recipient)
-        write_log_entry(
-            domain, timestamp, sender, recipient, "block", f"SpamAssassin: {reason}"
-        )
+        full_reason = f"SpamAssassin: {reason}"
+        write_log_entry(domain, timestamp, sender, recipient, "block", full_reason)
+        spamhaus_list, list_desc = detect_spamhaus(reason)
+        if spamhaus_list:
+            write_spamhaus_entry(
+                timestamp, domain, sender, recipient,
+                extract_client_ip(client_str),
+                spamhaus_list, list_desc, "spamassassin", full_reason,
+            )
         return
 
     # --- header_checks REJECT (dangerous attachment) ---

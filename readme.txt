@@ -243,11 +243,34 @@ LOGS
   Consolidated log (all domains in a single file):
     cat /var/log/spamhaus/general_activity.log
 
+  Spamhaus blocks log (only Spamhaus-triggered rejections, with full detail):
+    cat /var/log/spamhaus/spamhaus_blocks.log
+
   CSV format (per-domain):
     timestamp,sender,recipient,status,reason
 
   CSV format (consolidated, adds domain column):
     timestamp,domain,sender,recipient,status,reason
+
+  CSV format (Spamhaus blocks):
+    timestamp,domain,sender,recipient,client_ip,spamhaus_list,
+    list_description,block_stage,reason
+
+    Fields:
+      client_ip        - IP address of the connecting server
+      spamhaus_list    - Which Spamhaus list triggered the block:
+                           zen.spamhaus.org  - ZEN (SBL+CSS+XBL+PBL combined)
+                           sbl.spamhaus.org  - SBL (known spam sources)
+                           xbl.spamhaus.org  - XBL (exploited hosts / botnets)
+                           pbl.spamhaus.org  - PBL (dynamic / residential IPs)
+                           css.spamhaus.org  - CSS (snowshoe spam)
+                           dbl.spamhaus.org  - DBL (spam / phishing domains)
+                           zrd.spamhaus.org  - ZRD (newly registered domains)
+      list_description - Human-readable explanation of the list
+      block_stage      - Where in the pipeline the block happened:
+                           smtpd        - SMTP recipient checks (RBL/RHSBL)
+                           postscreen   - Connection-level DNSBL filtering
+                           spamassassin - Content scan with Spamhaus DQS rules
 
   Statuses:
     relay  - Mail accepted and delivered to destination server
@@ -468,5 +491,5 @@ FILE STRUCTURE
   /etc/postsrsd.secret            SRS secret key (if SRS enabled)
   /etc/letsencrypt/               TLS certificates (if Let's Encrypt enabled)
   /opt/mail-gateway/scripts/      Mail logger
-  /var/log/spamhaus/              Per-domain logs (activity.log)
+  /var/log/spamhaus/              Per-domain logs + Spamhaus blocks log
   /var/lib/mail-gateway/          Logger state (read position tracking)
